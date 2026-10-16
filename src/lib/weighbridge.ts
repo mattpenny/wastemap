@@ -10,7 +10,8 @@
  * no per-facility throughput, whereas these are measured per-weigh-in records
  * from the station's own weighbridge. Keep the two clearly labelled apart.
  */
-import RAW from "@/data/weighbridge.json";
+import RAW from "@/data/weighbridge/index.json";
+import { STATION_MONTHS } from "@/data/weighbridge/manifest";
 
 /** One code's tonnage on one day. Names live on the station, not here. */
 export interface WeighbridgeDaySplit {
@@ -81,11 +82,37 @@ export interface WeighbridgeVehicleTask {
   loads: number;
 }
 
-export interface WeighbridgeStation {
+/**
+ * One station-month on disk (`src/data/weighbridge/stations/<ST>/<YYYY-MM>.json`).
+ *
+ * The day rows carry codes only — names, groups and the GTW flag live once on
+ * the station summary — so a month file is pure numbers and stays small.
+ */
+export interface WeighbridgeMonthFile {
+  stationId: string;
+  facilityId: string;
+  /** `YYYY-MM`. */
+  month: string;
+  /** Number of day rows, so a caller can size the file before parsing it. */
+  days: number;
+  daily: WeighbridgeDay[];
+}
+
+/**
+ * A station without its day rows — the shape the index carries.
+ *
+ * Everything the app needs to *describe* a station (its period, totals, stream
+ * split and both ranked lists) is here; only the day-by-day rows are held back
+ * in the month files. That is what keeps the start-up payload proportional to
+ * the number of stations rather than to the number of days recorded.
+ */
+export interface WeighbridgeStationSummary {
   stationId: string;
   /** Joins to `FacilityProperties.id` in `src/data/waste-facilities.ts`. */
   facilityId: string;
   period: { from: string; to: string; operatingDays: number };
+  /** Months on disk for this station, ascending. `YYYY-MM`. */
+  months: string[];
   totals: {
     /** Received waste only — excludes the station's own maintenance loads. */
     tonnes: number;
@@ -94,7 +121,6 @@ export interface WeighbridgeStation {
     maintenanceTonnes: number;
     maintenanceLoads: number;
   };
-  daily: WeighbridgeDay[];
   streams: WeighbridgeStream[];
   vehicleTasks: WeighbridgeVehicleTask[];
   wasteTypes: WeighbridgeWasteType[];
@@ -107,6 +133,11 @@ export interface WeighbridgeStation {
     loads: number;
   }>;
   districts: WeighbridgeDistrict[];
+}
+
+/** A station with its day rows merged in — what the card actually renders. */
+export interface WeighbridgeStation extends WeighbridgeStationSummary {
+  daily: WeighbridgeDay[];
 }
 
 export interface WeighbridgeMeta {
@@ -129,9 +160,16 @@ export interface WeighbridgeMeta {
   warnings?: string[];
 }
 
+/** `/api/station-data` with no query: every station, without day rows. */
 export interface WeighbridgeDataset {
   meta: WeighbridgeMeta;
-  stations: Record<string, WeighbridgeStation>;
+  stations: Record<string, WeighbridgeStationSummary>;
+}
+
+/** `/api/station-data?station=…`: one station, day rows included. */
+export interface WeighbridgeStationResponse {
+  meta: WeighbridgeMeta;
+  station: WeighbridgeStation;
 }
 
 export const WEIGHBRIDGE_DATA = RAW as unknown as WeighbridgeDataset;
@@ -144,19 +182,39 @@ export const WEIGHBRIDGE_FACILITY_IDS = new Set(
   Object.values(WEIGHBRIDGE_DATA.stations).map((s) => s.facilityId)
 );
 
-/** Records for a station, looked up by its map facility id. */
-export function findStationRecordsByFacilityId(
+/** Index row for a station, looked up by its map facility id. */
+export function findStationSummaryByFacilityId(
   facilityId: string
-): WeighbridgeStation | null {
+): WeighbridgeStationSummary | null {
   for (const station of Object.values(WEIGHBRIDGE_DATA.stations)) {
     if (station.facilityId === facilityId) return station;
   }
   return null;
 }
 
-/** Records for a station, looked up by its operator station code (e.g. WKTS). */
-export function findStationRecords(stationId: string): WeighbridgeStation | null {
+/** Index row for a station, looked up by its operator code (e.g. WKTS). */
+export function findStationSummary(stationId: string): WeighbridgeStationSummary | null {
   return WEIGHBRIDGE_DATA.stations[stationId.toUpperCase()] ?? null;
+}
+
+/**
+ * A station with every month file merged in, ascending by date.
+ *
+ * The month files are the only place day rows live, so this is what turns the
+ * index row back into something the card can render. Months are read from the
+ * generated manifest, which is also what puts them in the deployed bundle.
+ */
+export function stationWithDays(stationId: string): WeighbridgeStation | null {
+  const summary = findStationSummary(stationId);
+  if (!summary) return null;
+
+  const byMonth = STATION_MONTHS[summary.stationId] ?? {};
+  const daily = Object.keys(byMonth)
+    .sort()
+    .flatMap((month) => byMonth[month].daily)
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  return { ...summary, daily };
 }
 
 // ---------------------------------------------------------------------------

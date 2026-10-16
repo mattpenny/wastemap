@@ -9,7 +9,7 @@ const zooms = new Map();
 let bytes = 0;
 let count = 0;
 page.on("response", async (r) => {
-  const m = /World_Imagery\/MapServer\/tile\/(\d+)\//.exec(r.url());
+  const m = /xyz\/imagery\/WGS84\/(\d+)\//.exec(r.url());
   if (!m) return;
   zooms.set(m[1], (zooms.get(m[1]) ?? 0) + 1);
   count += 1;

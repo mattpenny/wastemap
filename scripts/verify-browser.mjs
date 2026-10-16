@@ -174,10 +174,39 @@ check("All quick filter not selected",
 const rtsRows = await page.locator("aside ul > li").count();
 check("ranking lists 7 RTS entries (6 stations + OITF group)", rtsRows === 7, `rows=${rtsRows}`);
 
+// --- facility cards: short label at rest, full name on hover ---
+// Hovering a row slides the short label out to the right while the full name
+// comes in from the left. innerText reports both, so the assertion is that the
+// full name is present *and* that the rest state showed only the short one.
+const sttsRow = page.locator("aside ul > li button", { hasText: "STTS" }).first();
+check("ranking rows show the abbreviation, not the full name",
+  (await sttsRow.count()) === 1 && !/Shatin Transfer Station/.test(await page.locator("aside ul > li").first().innerText()));
+await sttsRow.hover();
+await page.waitForTimeout(1600);
+check("hovering a card reveals the full name",
+  /Shatin Transfer Station/.test(await sttsRow.innerText()), await sttsRow.innerText());
+
+// --- the three-way style switch, including the Lands Department aerial layer ---
+check("style switch offers Satellite / Aerial / Official",
+  (await page.getByRole("button", { name: /^Aerial$/ }).count()) === 1);
+const aerialRequested = page.waitForRequest(
+  (req) => /mapapi\.geodata\.gov\.hk.*\/imagery\//.test(req.url()),
+  { timeout: 20000 }
+);
+await page.getByRole("button", { name: /^Aerial$/ }).click();
+try {
+  await aerialRequested;
+  check("Aerial style pulls Lands Department imagery", true);
+} catch {
+  check("Aerial style pulls Lands Department imagery", false, "no imagery request seen");
+}
+await page.getByRole("button", { name: /^Satellite$/ }).click();
+await page.waitForTimeout(1500);
+
 // =====================================================================
 // 4. Open an RTS drawer: default view must be clean
 // =====================================================================
-const iets = page.locator("button", { hasText: "Island East Transfer Station" }).first();
+const iets = page.locator("button", { hasText: "IETS" }).first();
 check("IETS row present in ranking", (await iets.count()) === 1);
 await iets.click();
 await page.waitForTimeout(1500);
@@ -261,7 +290,7 @@ check("All filter restores 11/19 published", bodyText.includes("11/19"));
 // =====================================================================
 // 7. WENT landfill drawer (void volume)
 // =====================================================================
-const went = page.locator("button", { hasText: "West New Territories Landfill" }).first();
+const went = page.locator("button", { hasText: "WENT" }).first();
 await went.click();
 await page.waitForTimeout(1200);
 const wentDrawer = page.locator('aside[role="dialog"]');
@@ -277,7 +306,7 @@ await page.waitForTimeout(600);
 // =====================================================================
 // 8. OITF expand
 // =====================================================================
-const oitf = page.locator("button", { hasText: /Outlying Islands Transfer/ }).first();
+const oitf = page.locator("button", { hasText: "OITF" }).first();
 if (await oitf.count()) {
   await oitf.click();
   await page.waitForTimeout(800);
@@ -296,7 +325,7 @@ if (await oitf.count()) {
 // also proves the block stays absent for every other station (see the IETS
 // drawer checks in section 4, which assert no chart appears there).
 {
-  const wkts = page.locator("button", { hasText: "West Kowloon Transfer Station" }).first();
+  const wkts = page.locator("button", { hasText: "WKTS" }).first();
   check("WKTS row present in ranking", (await wkts.count()) === 1);
   await wkts.click();
   await page.waitForTimeout(2000);
@@ -823,12 +852,30 @@ if (await oitf.count()) {
   await mobile.waitForTimeout(700);
   check("mobile: tapping the active tab closes its sheet", !(await sheetShown("trend-sheet")));
 
+  // Moving the map must collapse whatever sheet is open: the sheets cover most
+  // of the map, so dragging underneath one is pointless. The guard is that the
+  // app's own camera moves (selecting a site, Reset view) must NOT close them,
+  // which is why the map reports gestures only.
+  await tab("list").click();
+  await mobile.waitForTimeout(900);
+  check("mobile: list sheet opens for the drag test", await sheetShown("ranking-sheet"));
+  await mobile.mouse.move(200, 300);
+  await mobile.mouse.down();
+  await mobile.mouse.move(140, 210, { steps: 12 });
+  await mobile.mouse.up();
+  await mobile.waitForTimeout(900);
+  check("mobile: dragging the map collapses the open sheet", !(await sheetShown("ranking-sheet")));
+  // And selecting a site afterwards must still fly the camera without the
+  // sheet snapping shut mid-way through opening it.
+  await tab("list").click();
+  await mobile.waitForTimeout(900);
+  check("mobile: sheet reopens after the drag", await sheetShown("ranking-sheet"));
+
   // The weighbridge block has to survive the phone drawer too — it is the
   // densest thing in the app, and the mobile drawer is a bottom sheet rather
-  // than the desktop side panel.
-  await tab("list").click();
-  await mobile.waitForTimeout(1000);
-  await mobile.locator("button", { hasText: "West Kowloon Transfer Station" }).first().click();
+  // than the desktop side panel. The sheet is already open from the drag test
+  // above, so tapping the tab again would close it (the dock is an accordion).
+  await mobile.locator("button", { hasText: "WKTS" }).first().click();
   await mobile.waitForTimeout(2500);
   const mobileWb = await mobile.evaluate(() => {
     const sec = document.querySelector('[data-testid="weighbridge-section"]');

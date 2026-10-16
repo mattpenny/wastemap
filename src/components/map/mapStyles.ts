@@ -24,7 +24,7 @@ import type { StyleSpecification } from "maplibre-gl";
  * terms of use, so it is baked into the style.
  */
 
-export type MapStyleId = "official" | "satellite";
+export type MapStyleId = "official" | "satellite" | "aerial";
 
 /** Satellite is the default view. */
 export const DEFAULT_MAP_STYLE: MapStyleId = "satellite";
@@ -179,10 +179,73 @@ export function satelliteStyle(): StyleSpecification {
   };
 }
 
+/**
+ * Lands Department aerial imagery (官方航拍).
+ *
+ * The same MapAPI the official cartographic map uses, on its `imagery` layer.
+ * Worth having as its own style because Esri's World Imagery over Hong Kong is
+ * a multi-date mosaic: it carries visible cloud shadows (measured over the sea
+ * south-west of Lamma, Esri reads ~31 luminance where the Lands Department's
+ * own survey reads ~78 across the same tiles) and hard tile seams. This layer
+ * is one agency's survey, so it is consistent — and it is the official record
+ * for the territory.
+ *
+ * The catch, and the reason it is not the default: it is served as PNG only
+ * (`.jpg`/`.webp` both 404) at ~161 KB a tile against Esri's ~10 KB, which is
+ * ~22 MB for the opening view instead of 1.7 MB. It is a deliberate opt-in.
+ */
+export function aerialStyle(): StyleSpecification {
+  return {
+    version: 8,
+    sources: {
+      imagery: {
+        type: "raster",
+        tiles: [`${HKG_MAPAPI}/imagery/WGS84/{z}/{x}/{y}.png`],
+        // Native 256 — this imagery is genuinely high-resolution at z13+, so
+        // unlike the Esri source it needs no tile-zoom nudge.
+        tileSize: 256,
+        maxzoom: 19,
+        attribution: LANDSD_ATTRIBUTION,
+      },
+      labels: {
+        type: "raster",
+        tiles: [
+          "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
+        ],
+        tileSize: 256,
+        maxzoom: 19,
+        attribution: ESRI_ATTRIBUTION,
+      },
+    },
+    layers: [
+      {
+        id: "background",
+        type: "background",
+        paint: { "background-color": "#0b1220" },
+      },
+      {
+        id: "aerial",
+        type: "raster",
+        source: "imagery",
+        paint: { "raster-fade-duration": 0 },
+      },
+      {
+        id: "places",
+        type: "raster",
+        source: "labels",
+        paint: { "raster-fade-duration": 0, "raster-opacity": 0.88 },
+      },
+    ],
+  };
+}
+
 export function styleFor(
   id: MapStyleId,
   lang: MapLang = "en"
 ): StyleSpecification | string {
+  if (id === "aerial") {
+    return aerialStyle();
+  }
   if (id === "satellite") {
     // A Mapbox token, if supplied, upgrades the satellite slot to a hybrid
     // satellite-streets style; otherwise the key-less Esri stack is used.

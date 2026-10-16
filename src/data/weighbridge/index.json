@@ -1,0 +1,403 @@
+{
+  "meta": {
+    "source": "Station weighbridge exports supplied by the operator (per-weigh-in records).",
+    "sourceZh": "由營運方提供的轉運站地磅記錄（逐次過磅）。",
+    "statusKept": "完成",
+    "generatedAt": "2026-10-16T14:38:06.462Z",
+    "sourceFiles": [
+      "wkts202610.json"
+    ],
+    "stations": [
+      "WKTS"
+    ],
+    "excluded": {
+      "notCompletedRecords": 5,
+      "notCompletedTonnes": 0.05,
+      "notCompletedByStatus": {
+        "取消": 4,
+        "拒絕": 1
+      },
+      "unparseableWeight": 0,
+      "unknownStation": 0,
+      "noteEn": "Only 完成 (completed) weigh-ins are counted. Cancelled and rejected weigh-ins are excluded, as is the station's own maintenance-vehicle tonnage.",
+      "noteZh": "只計算「完成」的過磅記錄；「取消」及「拒絕」記錄，以及轉運站自身維護車的噸數，均不計入。"
+    }
+  },
+  "stations": {
+    "WKTS": {
+      "stationId": "WKTS",
+      "facilityId": "rts-west-kowloon",
+      "period": {
+        "from": "2026-10-01",
+        "to": "2026-10-15",
+        "operatingDays": 15
+      },
+      "months": [
+        "2026-10"
+      ],
+      "totals": {
+        "tonnes": 50033.36,
+        "loads": 12015,
+        "tonnesPerDay": 3335.557,
+        "maintenanceTonnes": 50.42,
+        "maintenanceLoads": 66
+      },
+      "streams": [
+        {
+          "key": "private",
+          "labelEn": "Private vehicles",
+          "labelZh": "私人車",
+          "tonnes": 26114.94,
+          "loads": 6408,
+          "share": 0.522
+        },
+        {
+          "key": "public",
+          "labelEn": "FEHD / public",
+          "labelZh": "食環署",
+          "tonnes": 16392.31,
+          "loads": 4759,
+          "share": 0.328
+        },
+        {
+          "key": "gtw",
+          "labelEn": "Grease trap waste",
+          "labelZh": "隔油池廢物",
+          "tonnes": 7526.11,
+          "loads": 848,
+          "share": 0.15
+        }
+      ],
+      "vehicleTasks": [
+        {
+          "task": "P99 私人車傾倒",
+          "stream": "private",
+          "tonnes": 26114.94,
+          "loads": 6408
+        },
+        {
+          "task": "C31 食環署外判車傾倒",
+          "stream": "public",
+          "tonnes": 11084.84,
+          "loads": 3668
+        },
+        {
+          "task": "P97 油脂傾倒(私人車）",
+          "stream": "gtw",
+          "tonnes": 7526.11,
+          "loads": 848
+        },
+        {
+          "task": "G01 食環署傾倒",
+          "stream": "public",
+          "tonnes": 5307.47,
+          "loads": 1091
+        }
+      ],
+      "wasteTypes": [
+        {
+          "code": "D01.00",
+          "nameZh": "家居垃圾 - 混合垃圾",
+          "nameEn": "Domestic – mixed",
+          "group": "Domestic",
+          "tonnes": 19271.82,
+          "loads": 4090,
+          "gtw": false
+        },
+        {
+          "code": "P01.00",
+          "nameZh": "商業垃圾 - 混合垃圾",
+          "nameEn": "Commercial – mixed",
+          "group": "Commercial",
+          "tonnes": 18258.5,
+          "loads": 3432,
+          "gtw": false
+        },
+        {
+          "code": "S40.00",
+          "nameZh": "特殊廢物 - 隔油池廢物",
+          "nameEn": "Special – grease trap waste (GTW)",
+          "group": "Special",
+          "tonnes": 7526.11,
+          "loads": 848,
+          "gtw": true
+        },
+        {
+          "code": "P05.00",
+          "nameZh": "商業垃圾 - 其他大型混合廢物",
+          "nameEn": "Commercial – other bulky mixed",
+          "group": "Commercial",
+          "tonnes": 2053.34,
+          "loads": 1388,
+          "gtw": false
+        },
+        {
+          "code": "D05.00",
+          "nameZh": "家居垃圾 - 其他大型混合廢物",
+          "nameEn": "Domestic – other bulky mixed",
+          "group": "Domestic",
+          "tonnes": 1530.14,
+          "loads": 1167,
+          "gtw": false
+        },
+        {
+          "code": "P09.02",
+          "nameZh": "商業垃圾 - 木卡板",
+          "nameEn": "Commercial – wooden pallets",
+          "group": "Commercial",
+          "tonnes": 579.43,
+          "loads": 528,
+          "gtw": false
+        },
+        {
+          "code": "A01.00",
+          "nameZh": "紙漿生產設施-輕渣",
+          "nameEn": "Pulp production facility – light residue",
+          "group": "Other",
+          "tonnes": 225.27,
+          "loads": 30,
+          "gtw": false
+        },
+        {
+          "code": "P04.02",
+          "nameZh": "商業垃圾 - 樹葉, 剪草的草屑及幼枝",
+          "nameEn": "Commercial – leaves, grass cuttings and twigs",
+          "group": "Commercial",
+          "tonnes": 196.06,
+          "loads": 94,
+          "gtw": false
+        },
+        {
+          "code": "D03.00",
+          "nameZh": "家居垃圾 - 傢俬 (大型)",
+          "nameEn": "Domestic – furniture (bulky)",
+          "group": "Domestic",
+          "tonnes": 130.83,
+          "loads": 142,
+          "gtw": false
+        },
+        {
+          "code": "D06.00",
+          "nameZh": "家居垃圾 - 坑渠垃圾、砂礫、沙泥和碎石",
+          "nameEn": "Domestic – gully waste, grit, sand and rubble",
+          "group": "Domestic",
+          "tonnes": 129.04,
+          "loads": 241,
+          "gtw": false
+        },
+        {
+          "code": "I01.00",
+          "nameZh": "工業垃圾 - 混合",
+          "nameEn": "Industrial – mixed",
+          "group": "Industrial",
+          "tonnes": 63.34,
+          "loads": 10,
+          "gtw": false
+        },
+        {
+          "code": "P03.00",
+          "nameZh": "商業垃圾 - 傢俬 (大型)",
+          "nameEn": "Commercial – furniture (bulky)",
+          "group": "Commercial",
+          "tonnes": 23.84,
+          "loads": 18,
+          "gtw": false
+        },
+        {
+          "code": "P07.00",
+          "nameZh": "商業垃圾 - 街市垃圾",
+          "nameEn": "Commercial – market waste",
+          "group": "Commercial",
+          "tonnes": 15.32,
+          "loads": 5,
+          "gtw": false
+        },
+        {
+          "code": "P13.00",
+          "nameZh": "商業垃圾 - 紡織品／布碎",
+          "nameEn": "Commercial – textiles / rags",
+          "group": "Commercial",
+          "tonnes": 13.13,
+          "loads": 12,
+          "gtw": false
+        },
+        {
+          "code": "I06.00",
+          "nameZh": "工業垃圾 - 其他大型混合廢物",
+          "nameEn": "Industrial – other bulky mixed",
+          "group": "Industrial",
+          "tonnes": 8.99,
+          "loads": 5,
+          "gtw": false
+        },
+        {
+          "code": "D09.00",
+          "nameZh": "家居垃圾 - 海洋 (漂浮) 垃圾",
+          "nameEn": "Domestic – marine (floating) refuse",
+          "group": "Domestic",
+          "tonnes": 8.2,
+          "loads": 5,
+          "gtw": false
+        }
+      ],
+      "wasteTypesMaintenance": [
+        {
+          "code": "S42.00",
+          "nameZh": "Specia Waste - Dewatered",
+          "nameEn": "Special – dewatered",
+          "tonnes": 32.96,
+          "loads": 64
+        },
+        {
+          "code": "S40.03",
+          "nameZh": "LRA",
+          "nameEn": "Special – LRA",
+          "tonnes": 17.46,
+          "loads": 2
+        }
+      ],
+      "districts": [
+        {
+          "code": "31",
+          "nameZh": "葵青區",
+          "nameEn": "Kwai Tsing",
+          "tonnes": 8793.35,
+          "loads": 2459
+        },
+        {
+          "code": "12",
+          "nameZh": "深水埗區",
+          "nameEn": "Sham Shui Po",
+          "tonnes": 7791.5,
+          "loads": 1969
+        },
+        {
+          "code": "11",
+          "nameZh": "油尖旺區",
+          "nameEn": "Yau Tsim Mong",
+          "tonnes": 7751,
+          "loads": 2213
+        },
+        {
+          "code": "13",
+          "nameZh": "九龍城區",
+          "nameEn": "Kowloon City",
+          "tonnes": 6206.97,
+          "loads": 1273
+        },
+        {
+          "code": "32",
+          "nameZh": "荃灣區",
+          "nameEn": "Tsuen Wan",
+          "tonnes": 4894.4,
+          "loads": 1130
+        },
+        {
+          "code": "14",
+          "nameZh": "黃大仙區",
+          "nameEn": "Wong Tai Sin",
+          "tonnes": 4483.53,
+          "loads": 992
+        },
+        {
+          "code": "15",
+          "nameZh": "觀塘區",
+          "nameEn": "Kwun Tong",
+          "tonnes": 2182.06,
+          "loads": 442
+        },
+        {
+          "code": "37",
+          "nameZh": "沙田區",
+          "nameEn": "Sha Tin",
+          "tonnes": 1580.87,
+          "loads": 234
+        },
+        {
+          "code": "52",
+          "nameZh": "機場/過境轉運設施",
+          "nameEn": "Airport / cross-boundary transfer",
+          "tonnes": 1125.31,
+          "loads": 232
+        },
+        {
+          "code": "34",
+          "nameZh": "元朗區",
+          "nameEn": "Yuen Long",
+          "tonnes": 879.8,
+          "loads": 121
+        },
+        {
+          "code": "36",
+          "nameZh": "大埔區",
+          "nameEn": "Tai Po",
+          "tonnes": 763.49,
+          "loads": 105
+        },
+        {
+          "code": "38",
+          "nameZh": "西貢區",
+          "nameEn": "Sai Kung",
+          "tonnes": 736.6,
+          "loads": 222
+        },
+        {
+          "code": "33",
+          "nameZh": "屯門區",
+          "nameEn": "Tuen Mun",
+          "tonnes": 638.07,
+          "loads": 157
+        },
+        {
+          "code": "22",
+          "nameZh": "灣仔區",
+          "nameEn": "Wan Chai",
+          "tonnes": 530.47,
+          "loads": 83
+        },
+        {
+          "code": "35",
+          "nameZh": "北區",
+          "nameEn": "North",
+          "tonnes": 504.27,
+          "loads": 86
+        },
+        {
+          "code": "21",
+          "nameZh": "中西區",
+          "nameEn": "Central and Western",
+          "tonnes": 428.5,
+          "loads": 102
+        },
+        {
+          "code": "41",
+          "nameZh": "北大嶼山其他",
+          "nameEn": "North Lantau (other)",
+          "tonnes": 206.55,
+          "loads": 72
+        },
+        {
+          "code": "51",
+          "nameZh": "東涌",
+          "nameEn": "Tung Chung",
+          "tonnes": 185.46,
+          "loads": 49
+        },
+        {
+          "code": "24",
+          "nameZh": "南區",
+          "nameEn": "Southern",
+          "tonnes": 177.75,
+          "loads": 38
+        },
+        {
+          "code": "23",
+          "nameZh": "東區",
+          "nameEn": "Eastern",
+          "tonnes": 173.41,
+          "loads": 36
+        }
+      ]
+    }
+  }
+}

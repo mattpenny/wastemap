@@ -77,6 +77,14 @@ export interface FacilityProperties {
   id: string;
   nameEn: string;
   nameZh: string;
+  /**
+   * Short label for the facility cards. The official code where the site has
+   * one (WKTS, WENT…), otherwise the distinguishing part of the name with the
+   * generic "Transfer Facility" suffix dropped. The full name replaces it on
+   * hover.
+   */
+  shortEn: string;
+  shortZh: string;
   category: FacilityCategory;
   /** [longitude, latitude] — WGS84, official. */
   coordinates: [number, number];
@@ -196,6 +204,9 @@ export const WASTE_FACILITIES_DATA: FacilityProperties[] = [
     id: "landfill-went",
     nameEn: "West New Territories Landfill (WENT)",
     nameZh: "新界西堆填區",
+    /** Short label for the facility cards; the full name is revealed on hover. */
+    shortEn: "WENT",
+    shortZh: "新界西",
     category: "Landfill",
     coordinates: [113.932595, 22.416949],
     throughputTonnesPerDay: 6400,
@@ -241,6 +252,9 @@ export const WASTE_FACILITIES_DATA: FacilityProperties[] = [
     id: "landfill-nent",
     nameEn: "North East New Territories Landfill (NENT)",
     nameZh: "新界東北堆填區",
+    /** Short label for the facility cards; the full name is revealed on hover. */
+    shortEn: "NENT",
+    shortZh: "新界東北",
     category: "Landfill",
     coordinates: [114.170136, 22.545258],
     throughputTonnesPerDay: 6000,
@@ -288,6 +302,9 @@ export const WASTE_FACILITIES_DATA: FacilityProperties[] = [
     id: "landfill-sent",
     nameEn: "South East New Territories Landfill (SENT)",
     nameZh: "新界東南堆填區",
+    /** Short label for the facility cards; the full name is revealed on hover. */
+    shortEn: "SENT",
+    shortZh: "新界東南",
     category: "Landfill",
     coordinates: [114.280042, 22.282085],
     throughputTonnesPerDay: 2000,
@@ -337,6 +354,9 @@ export const WASTE_FACILITIES_DATA: FacilityProperties[] = [
     id: "rts-island-east",
     nameEn: "Island East Transfer Station (IETS)",
     nameZh: "港島東廢物轉運站",
+    /** Short label for the facility cards; the full name is revealed on hover. */
+    shortEn: "IETS",
+    shortZh: "港島東",
     category: "RTS",
     coordinates: [114.247226, 22.267811],
     throughputTonnesPerDay: 1225,
@@ -391,6 +411,9 @@ export const WASTE_FACILITIES_DATA: FacilityProperties[] = [
     id: "rts-island-west",
     nameEn: "Island West Transfer Station (IWTS)",
     nameZh: "港島西廢物轉運站",
+    /** Short label for the facility cards; the full name is revealed on hover. */
+    shortEn: "IWTS",
+    shortZh: "港島西",
     category: "RTS",
     coordinates: [114.119198, 22.281278],
     throughputTonnesPerDay: 1153,
@@ -446,6 +469,9 @@ export const WASTE_FACILITIES_DATA: FacilityProperties[] = [
     id: "rts-west-kowloon",
     nameEn: "West Kowloon Transfer Station (WKTS)",
     nameZh: "西九龍廢物轉運站",
+    /** Short label for the facility cards; the full name is revealed on hover. */
+    shortEn: "WKTS",
+    shortZh: "西九龍",
     category: "RTS",
     coordinates: [114.140649, 22.328047],
     throughputTonnesPerDay: 2700,
@@ -499,6 +525,9 @@ export const WASTE_FACILITIES_DATA: FacilityProperties[] = [
     id: "rts-shatin",
     nameEn: "Shatin Transfer Station (STTS)",
     nameZh: "沙田廢物轉運站",
+    /** Short label for the facility cards; the full name is revealed on hover. */
+    shortEn: "STTS",
+    shortZh: "沙田",
     category: "RTS",
     coordinates: [114.211988, 22.387586],
     throughputTonnesPerDay: 1655,
@@ -551,6 +580,9 @@ export const WASTE_FACILITIES_DATA: FacilityProperties[] = [
     id: "rts-north-lantau",
     nameEn: "North Lantau Transfer Station (NLTS)",
     nameZh: "北大嶼山廢物轉運站",
+    /** Short label for the facility cards; the full name is revealed on hover. */
+    shortEn: "NLTS",
+    shortZh: "北大嶼山",
     category: "RTS",
     coordinates: [113.997143, 22.319076],
     throughputTonnesPerDay: 660,
@@ -603,6 +635,9 @@ export const WASTE_FACILITIES_DATA: FacilityProperties[] = [
     id: "rts-nwnt",
     nameEn: "North West New Territories Transfer Station (NWNTTS)",
     nameZh: "新界西北廢物轉運站",
+    /** Short label for the facility cards; the full name is revealed on hover. */
+    shortEn: "NWNTTS",
+    shortZh: "新界西北",
     category: "RTS",
     coordinates: [113.996337, 22.422582],
     throughputTonnesPerDay: 1260,
@@ -663,6 +698,9 @@ export const WASTE_FACILITIES_DATA: FacilityProperties[] = [
     id: "rts-oitf-mui-wo",
     nameEn: "Mui Wo Transfer Facility",
     nameZh: "梅窩廢物轉運設施",
+    /** Short label for the facility cards; the full name is revealed on hover. */
+    shortEn: "Mui Wo",
+    shortZh: "梅窩",
     category: "RTS",
     coordinates: [114.005523, 22.261094],
     throughputTonnesPerDay: null,
@@ -690,6 +728,9 @@ export const WASTE_FACILITIES_DATA: FacilityProperties[] = [
     id: "rts-oitf-cheung-chau",
     nameEn: "Cheung Chau Transfer Facility",
     nameZh: "長洲廢物轉運設施",
+    /** Short label for the facility cards; the full name is revealed on hover. */
+    shortEn: "Cheung Chau",
+    shortZh: "長洲",
     category: "RTS",
     coordinates: [114.025638, 22.218951],
     throughputTonnesPerDay: null,
@@ -717,6 +758,9 @@ export const WASTE_FACILITIES_DATA: FacilityProperties[] = [
     id: "rts-oitf-peng-chau",
     nameEn: "Peng Chau Transfer Facility",
     nameZh: "坪洲廢物轉運設施",
+    /** Short label for the facility cards; the full name is revealed on hover. */
+    shortEn: "Peng Chau",
+    shortZh: "坪洲",
     category: "RTS",
     coordinates: [114.033482, 22.289564],
     throughputTonnesPerDay: null,
@@ -744,6 +788,9 @@ export const WASTE_FACILITIES_DATA: FacilityProperties[] = [
     id: "rts-oitf-hei-ling-chau",
     nameEn: "Hei Ling Chau Transfer Facility",
     nameZh: "喜靈洲廢物轉運設施",
+    /** Short label for the facility cards; the full name is revealed on hover. */
+    shortEn: "Hei Ling Chau",
+    shortZh: "喜靈洲",
     category: "RTS",
     coordinates: [114.026663, 22.256596],
     throughputTonnesPerDay: null,
@@ -772,6 +819,9 @@ export const WASTE_FACILITIES_DATA: FacilityProperties[] = [
     id: "rts-oitf-yung-shue-wan",
     nameEn: "Yung Shue Wan Transfer Facility",
     nameZh: "榕樹灣廢物轉運設施",
+    /** Short label for the facility cards; the full name is revealed on hover. */
+    shortEn: "Yung Shue Wan",
+    shortZh: "榕樹灣",
     category: "RTS",
     coordinates: [114.109489, 22.224876],
     throughputTonnesPerDay: null,
@@ -799,6 +849,9 @@ export const WASTE_FACILITIES_DATA: FacilityProperties[] = [
     id: "rts-oitf-sok-kwu-wan",
     nameEn: "Sok Kwu Wan Transfer Facility",
     nameZh: "索罟灣廢物轉運設施",
+    /** Short label for the facility cards; the full name is revealed on hover. */
+    shortEn: "Sok Kwu Wan",
+    shortZh: "索罟灣",
     category: "RTS",
     coordinates: [114.134939, 22.207812],
     throughputTonnesPerDay: null,
@@ -827,6 +880,9 @@ export const WASTE_FACILITIES_DATA: FacilityProperties[] = [
     id: "rts-oitf-ma-wan",
     nameEn: "Ma Wan Transfer Facility",
     nameZh: "馬灣廢物轉運設施",
+    /** Short label for the facility cards; the full name is revealed on hover. */
+    shortEn: "Ma Wan",
+    shortZh: "馬灣",
     category: "RTS",
     coordinates: [114.058484, 22.355623],
     throughputTonnesPerDay: null,
@@ -857,6 +913,9 @@ export const WASTE_FACILITIES_DATA: FacilityProperties[] = [
     id: "ipark-shek-kwu-chau",
     nameEn: "I·PARK1 (Shek Kwu Chau)",
     nameZh: "I·PARK1（石鼓洲）",
+    /** Short label for the facility cards; the full name is revealed on hover. */
+    shortEn: "I·PARK1",
+    shortZh: "I·PARK1",
     category: "I-PARK",
     coordinates: [113.986748, 22.188594],
     // EPD publishes a design capacity but no operating throughput yet.
@@ -887,6 +946,9 @@ export const WASTE_FACILITIES_DATA: FacilityProperties[] = [
     id: "opark-siu-ho-wan",
     nameEn: "O·PARK1 (Organic Resources Recovery Centre)",
     nameZh: "O·PARK1（有機資源回收中心）",
+    /** Short label for the facility cards; the full name is revealed on hover. */
+    shortEn: "O·PARK1",
+    shortZh: "O·PARK1",
     category: "O-PARK",
     coordinates: [113.99779, 22.31447],
     throughputTonnesPerDay: 200,
@@ -911,6 +973,9 @@ export const WASTE_FACILITIES_DATA: FacilityProperties[] = [
     id: "ypark-tsang-tsui",
     nameEn: "Y·PARK [Wood] (Yard Waste Recycling Centre)",
     nameZh: "Y·PARK［園林廢物回收中心］",
+    /** Short label for the facility cards; the full name is revealed on hover. */
+    shortEn: "Y·PARK",
+    shortZh: "Y·PARK",
     category: "Y-PARK",
     coordinates: [113.911251, 22.403815],
     // EPD describes this as a handling capacity, not a measured throughput.
