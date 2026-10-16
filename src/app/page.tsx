@@ -8,10 +8,10 @@ import {
   Layers,
   ListFilter,
   Map as MapIcon,
-  Plane,
   RotateCcw,
   Satellite,
   SlidersHorizontal,
+  TrendingUp,
 } from "lucide-react";
 
 import WasteMap3D, {
@@ -20,20 +20,15 @@ import WasteMap3D, {
 import type { MapStyleId } from "@/components/map/mapStyles";
 import { DEFAULT_MAP_STYLE } from "@/components/map/mapStyles";
 import FacilityDetailDrawer from "@/components/ui/FacilityDetailDrawer";
-import ShortName from "@/components/ui/ShortName";
+import TerritoryTrendCard from "@/components/ui/TerritoryTrendCard";
 import MapInfoButton from "@/components/ui/MapInfoButton";
 import type {
   FacilityCategory,
   FacilityProperties,
 } from "@/data/waste-facilities";
-import { CATEGORY_META, CATEGORY_ORDER, OITF_GROUP_HEX, facilityColorMap } from "@/lib/categories";
+import { CATEGORY_META, CATEGORY_ORDER } from "@/lib/categories";
 import { t, type Lang } from "@/lib/i18n";
-import type {
-  WeighbridgeDataset,
-  WeighbridgeStation,
-  WeighbridgeStationResponse,
-  WeighbridgeStationSummary,
-} from "@/lib/weighbridge";
+import type { WeighbridgeDataset, WeighbridgeStation } from "@/lib/weighbridge";
 import { cn, formatNumber } from "@/lib/utils";
 
 /** Shape of a single feature as returned by `/api/waste-data`. */
@@ -255,6 +250,7 @@ export default function HomePage() {
   /** Every panel starts collapsed; the map is the opening view. */
   const [legendOpen, setLegendOpen] = useState(false);
   const [listOpen, setListOpen] = useState(false);
+  const [trendOpen, setTrendOpen] = useState(false);
   /**
    * Phone header, both collapsed by default so the opening view is the title
    * and nothing else. `headerDetailOpen` reveals the facility counts inside the
@@ -273,17 +269,10 @@ export default function HomePage() {
    * Measured intake, keyed by station code, from `/api/station-data`. Only the
    * stations that report weighbridge data appear here; the rest simply have no
    * entry, and the drawer omits the section.
-   *
-   * This is the *index* — period, totals and both ranked lists per station, no
-   * day rows — so it grows with the number of stations, not with the number of
-   * days recorded. Day rows live in per-station-month files and are fetched
-   * when a station is actually opened.
    */
   const [stationRecords, setStationRecords] = useState<
-    Record<string, WeighbridgeStationSummary>
+    Record<string, WeighbridgeStation>
   >({});
-  /** The open station with its day rows merged in, fetched on demand. */
-  const [stationDetail, setStationDetail] = useState<WeighbridgeStation | null>(null);
 
   // Drive the CSS variable that every text size in the chrome multiplies by.
   useEffect(() => {
@@ -362,13 +351,6 @@ export default function HomePage() {
     () => facilities.filter((f) => visibleCategories.includes(f.category)),
     [facilities, visibleCategories]
   );
-
-  /**
-   * Colour per facility. Computed from the whole register, not the filtered
-   * list, so a site keeps its colour when the category filter changes — and
-   * shared with the map so the card's dot and the pillar agree.
-   */
-  const facilityColors = useMemo(() => facilityColorMap(facilities), [facilities]);
 
   const stats = useMemo(() => {
     if (visibleFacilities.length === 0) {
@@ -470,36 +452,22 @@ export default function HomePage() {
    * active layout.
    */
   const toggleDockPanel = useCallback(
-    (which: "list" | "legend") => {
+    (which: "list" | "legend" | "trend") => {
       const accordion =
         typeof window !== "undefined" &&
         window.matchMedia("(max-width: 1023px)").matches;
 
-      const current = which === "list" ? listOpen : legendOpen;
+      const current =
+        which === "list" ? listOpen : which === "legend" ? legendOpen : trendOpen;
       const next = !current;
       const closeOthers = accordion && next;
 
       setListOpen(which === "list" ? next : closeOthers ? false : listOpen);
       setLegendOpen(which === "legend" ? next : closeOthers ? false : legendOpen);
+      setTrendOpen(which === "trend" ? next : closeOthers ? false : trendOpen);
     },
-    [listOpen, legendOpen]
+    [listOpen, legendOpen, trendOpen]
   );
-
-  /**
-   * Collapse every panel when the user moves the map.
-   *
-   * Phones only, and only for gestures: the panels are bottom sheets that cover
-   * most of the map, so dragging the map underneath one is pointless. On
-   * desktop the three cards live in their own corners and never obstruct a pan,
-   * so they stay put. Programmatic moves (selecting a facility, Reset view) do
-   * not come through here at all — see `onUserMove` in WasteMap3D.
-   */
-  const handleMapUserMove = useCallback(() => {
-    if (typeof window === "undefined") return;
-    if (!window.matchMedia("(max-width: 1023px)").matches) return;
-    setListOpen(false);
-    setLegendOpen(false);
-  }, []);
 
   const toggleCategory = useCallback((category: FacilityCategory) => {
     setVisibleCategories((prev) => {
@@ -578,14 +546,6 @@ export default function HomePage() {
             icon: <Satellite className="h-3.5 w-3.5" />,
           },
           {
-            // Lands Department aerial imagery — no cloud shadows or mosaic
-            // seams, but ~13x the tile weight, so it is opt-in rather than the
-            // default. See `aerialStyle` in mapStyles.ts.
-            value: "aerial",
-            label: t("aerial", lang),
-            icon: <Plane className="h-3.5 w-3.5" />,
-          },
-          {
             value: "official",
             label: t("officialMap", lang),
             icon: <MapIcon className="h-3.5 w-3.5" />,
@@ -627,48 +587,11 @@ export default function HomePage() {
    * facility cannot silently detach its data.
    */
   const selectedStationRecords = useMemo<WeighbridgeStation | null>(() => {
-    if (!selectedId || !stationDetail) return null;
-    return stationDetail.facilityId === selectedId ? stationDetail : null;
-  }, [selectedId, stationDetail]);
-
-  /**
-   * Day rows for the station that is open, fetched from its month files.
-   *
-   * The index already knows which stations have coverage, so a station without
-   * any never triggers a request — and with several stations and years on
-   * disk, only the one station the user opened is ever downloaded.
-   */
-  useEffect(() => {
-    if (!selectedId) {
-      setStationDetail(null);
-      return;
+    if (!selectedId) return null;
+    for (const station of Object.values(stationRecords)) {
+      if (station.facilityId === selectedId) return station;
     }
-    const summary = Object.values(stationRecords).find(
-      (s) => s.facilityId === selectedId
-    );
-    if (!summary) {
-      setStationDetail(null);
-      return;
-    }
-
-    const controller = new AbortController();
-    setStationDetail(null);
-    (async () => {
-      try {
-        const res = await fetch(
-          `/api/station-data?station=${encodeURIComponent(summary.stationId)}`,
-          { signal: controller.signal }
-        );
-        if (!res.ok) throw new Error(`Request failed with status ${res.status}`);
-        const data: WeighbridgeStationResponse = await res.json();
-        setStationDetail(data.station ?? null);
-      } catch (err) {
-        if (err instanceof DOMException && err.name === "AbortError") return;
-        console.warn("[waste-map] Station detail unavailable:", err);
-        setStationDetail(null);
-      }
-    })();
-    return () => controller.abort();
+    return null;
   }, [selectedId, stationRecords]);
 
   return (
@@ -689,7 +612,6 @@ export default function HomePage() {
           lang={lang}
           visibleCategories={visibleCategories}
           emptyHint={!loading && visibleFacilities.length === 0}
-          onUserMove={handleMapUserMove}
         />
 
         {/* ---------------- Overlay UI ---------------- */}
@@ -952,19 +874,17 @@ export default function HomePage() {
                                 isExpanded ? "collapseGroup" : "expandGroup",
                                 lang
                               )}
-                              className="group/row relative w-full rounded-xl px-2.5 py-2 text-left transition-colors hover:bg-white/[0.07] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60"
+                              className="w-full rounded-xl px-2.5 py-2 text-left transition-colors hover:bg-white/[0.07] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60"
                             >
                               <div className="flex items-center justify-between gap-2">
                                 <span className="flex min-w-0 items-center gap-1.5">
                                   <span
                                     className="h-1.5 w-1.5 shrink-0 rounded-full"
-                                    style={{ backgroundColor: OITF_GROUP_HEX }}
+                                    style={{ backgroundColor: meta.hex }}
                                   />
-                                  <ShortName
-                                    className="text-[length:calc(11.5px*var(--fs))] font-medium text-white/85"
-                                    short={t("oitfAbbr", lang)}
-                                    full={lang === "zh" ? entry.nameZh : entry.nameEn}
-                                  />
+                                  <span className="truncate text-[length:calc(11.5px*var(--fs))] font-medium text-white/85">
+                                    {lang === "zh" ? entry.nameZh : entry.nameEn}
+                                  </span>
                                   <span className="shrink-0 rounded-full bg-white/10 px-1.5 py-0.5 text-[length:calc(9px*var(--fs))] font-semibold tabular-nums text-white/55">
                                     {entry.facilities.length}
                                   </span>
@@ -1018,17 +938,17 @@ export default function HomePage() {
                                       <button
                                         onClick={() => selectFromList(child)}
                                         className={cn(
-                                          "group/row relative flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60",
+                                          "flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60",
                                           isActive
                                             ? "bg-white/12"
                                             : "hover:bg-white/[0.07]"
                                         )}
                                       >
-                                        <ShortName
-                                          className="text-[length:calc(11px*var(--fs))] text-white/70"
-                                          short={lang === "zh" ? child.shortZh : child.shortEn}
-                                          full={lang === "zh" ? child.nameZh : child.nameEn}
-                                        />
+                                        <span className="truncate text-[length:calc(11px*var(--fs))] text-white/70">
+                                          {lang === "zh"
+                                            ? child.nameZh
+                                            : child.nameEn}
+                                        </span>
                                         <span className="shrink-0 text-[length:calc(10px*var(--fs))] font-semibold tabular-nums text-white/50">
                                           {child.throughputTonnesPerDay === null
                                             ? t("notPublished", lang)
@@ -1047,16 +967,14 @@ export default function HomePage() {
                       /* ---------------- Single facility ---------------- */
                       const facility = entry.facility;
                       const meta = CATEGORY_META[facility.category];
-                      // Same colour the map draws this site in, so the dot in
-                      // the card and the pillar are recognisably the same thing.
-                      const accent = facilityColors.get(facility.id)?.hex ?? meta.hex;
+                      const accent = meta.hex;
                       const isActive = selectedId === facility.id;
                       return (
                         <li key={entry.id}>
                           <button
                             onClick={() => selectFromList(facility)}
                             className={cn(
-                              "group/row w-full rounded-xl px-2.5 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60",
+                              "w-full rounded-xl px-2.5 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60",
                               isActive ? "bg-white/12" : "hover:bg-white/[0.07]"
                             )}
                           >
@@ -1064,13 +982,11 @@ export default function HomePage() {
                               <span className="flex min-w-0 items-center gap-1.5">
                                 <span
                                   className="h-1.5 w-1.5 shrink-0 rounded-full"
-                                  style={{ backgroundColor: accent }}
+                                  style={{ backgroundColor: meta.hex }}
                                 />
-                                <ShortName
-                                  className="text-[length:calc(11.5px*var(--fs))] font-medium text-white/85"
-                                  short={lang === "zh" ? facility.shortZh : facility.shortEn}
-                                  full={lang === "zh" ? facility.nameZh : facility.nameEn}
-                                />
+                                <span className="truncate text-[length:calc(11.5px*var(--fs))] font-medium text-white/85">
+                                  {lang === "zh" ? facility.nameZh : facility.nameEn}
+                                </span>
                               </span>
                               <span
                                 className="shrink-0 text-[length:calc(11px*var(--fs))] font-bold tabular-nums"
@@ -1176,20 +1092,44 @@ export default function HomePage() {
             </div>
           </div>
 
-          {/* The Hong Kong-wide annual trend panel was removed at the user's
-              request. EPD publishes no per-facility time series, and the
-              territory-wide series it does publish is not what this app is
-              about; the data file stays (src/data/hk-waste-trend.ts) if it is
-              ever wanted back. */}
+          {/* Hong Kong-wide annual trend — a panel in its own right, deliberately
+              NOT a section of the facility drawer: EPD publishes no per-facility
+              time series, and territory totals inside a facility card read as if
+              that facility receives that waste mix. Hidden while the drawer is
+              open so the two never overlap. A sheet above the dock on phones;
+              its own bottom-right card from lg up. */}
+          {!drawerOpen && (
+            <div
+              data-testid="trend-sheet"
+              className={cn(
+                "pointer-events-auto w-full",
+                trendOpen ? "block" : "hidden",
+                "lg:absolute lg:bottom-3 lg:right-3 lg:block lg:w-auto"
+              )}
+            >
+              <TerritoryTrendCard
+                lang={lang}
+                isOpen={trendOpen}
+                onToggle={() => setTrendOpen((v) => !v)}
+                // The chart is taller than the other two sheets, so the phone
+                // sheet scrolls rather than clipping the legend under the plot.
+                className={cn(
+                  "w-full lg:w-72",
+                  trendOpen &&
+                    "max-h-[52vh] overflow-y-auto rounded-t-2xl lg:max-h-none lg:overflow-hidden lg:rounded-2xl"
+                )}
+              />
+            </div>
+          )}
 
-          {/* Dock — phones only. Two short tabs plus the map "i" button.
+          {/* Dock — phones only. Three short tabs plus the map "i" button.
               `lg:contents` dissolves this wrapper on desktop, which drops the
               info button back into the bottom-left corner (it carries
               `lg:absolute` of its own) and leaves the cards to their own
               corners. */}
           <div
             data-testid="bottom-dock"
-            className="pointer-events-auto relative flex items-stretch gap-1 border-t border-white/10 bg-slate-900/90 px-2 pb-2 pt-1.5 backdrop-blur-xl lg:contents"
+            className="pointer-events-auto flex items-stretch gap-1 border-t border-white/10 bg-slate-900/90 px-2 pb-2 pt-1.5 backdrop-blur-xl lg:contents"
           >
             <DockTab
               name="list"
@@ -1205,15 +1145,24 @@ export default function HomePage() {
               icon={<ListFilter className="h-4 w-4" />}
               label={t("dockLegend", lang)}
             />
+            {!drawerOpen && (
+              <DockTab
+                name="trend"
+                active={trendOpen}
+                onClick={() => toggleDockPanel("trend")}
+                icon={<TrendingUp className="h-4 w-4" />}
+                label={t("dockTrend", lang)}
+              />
+            )}
 
             {/* Map "i" — holds the imagery credit and the tech explanation that
-                used to sit permanently on screen. Centred in the dock on phones
-                (absolutely placed against the dock, which is `relative`), and
-                back in the bottom-left corner from lg up. */}
+                used to sit permanently on screen. Sits at the right end of the
+                dock on phones (spaced by the dock's own `gap-1`), and back in
+                the bottom-left corner from lg up. */}
             <MapInfoButton
               lang={lang}
               mapStyle={mapStyle}
-              className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 lg:absolute lg:bottom-3 lg:left-3 lg:top-auto lg:translate-x-0 lg:translate-y-0 lg:z-30"
+              className="shrink-0 lg:absolute lg:bottom-3 lg:left-3 lg:z-30"
             />
           </div>
           </div>

@@ -147,18 +147,15 @@ function check(name, cond, detail = "") {
     Math.abs((wkts?.totals?.maintenanceTonnes ?? 0) - 50.42) < 0.01 && wkts?.totals?.maintenanceLoads === 66,
     `${wkts?.totals?.maintenanceTonnes} / ${wkts?.totals?.maintenanceLoads}`);
 
-  // --- the index must be light: no day rows, but the months are listed ---
-  check("index lists the months on disk", JSON.stringify(wkts?.months) === JSON.stringify(["2026-10"]),
-    JSON.stringify(wkts?.months));
-  check("index carries no day rows", wkts?.daily === undefined, typeof wkts?.daily);
-
   // --- every dimension must reconcile to the same intake total ---
   const sum = (arr, key) => (arr ?? []).reduce((a, x) => a + (x[key] ?? 0), 0);
   const near = (a, b) => Math.abs(a - b) < 0.02;
   const total = wkts?.totals?.tonnes ?? 0;
+  check("WKTS daily sums to the total", near(sum(wkts?.daily, "tonnes"), total), String(sum(wkts?.daily, "tonnes")));
   check("WKTS waste types sum to the total", near(sum(wkts?.wasteTypes, "tonnes"), total), String(sum(wkts?.wasteTypes, "tonnes")));
   check("WKTS districts sum to the total", near(sum(wkts?.districts, "tonnes"), total), String(sum(wkts?.districts, "tonnes")));
   check("WKTS streams sum to the total", near(sum(wkts?.streams, "tonnes"), total), String(sum(wkts?.streams, "tonnes")));
+  check("WKTS daily has 15 rows", wkts?.daily?.length === 15, String(wkts?.daily?.length));
 
   // --- the delivery split, as the user specified it ---
   const streams = Object.fromEntries((wkts?.streams ?? []).map((s) => [s.key, s]));
@@ -204,38 +201,10 @@ function check(name, cond, detail = "") {
     JSON.stringify(sd.meta?.stations) === JSON.stringify(["WKTS"]), JSON.stringify(sd.meta?.stations));
 
   // --- filters ---
-  // ?station= and ?facility= return the *detail* response: one station, its
-  // month files merged in, day rows included. This is the only way day-level
-  // rows leave the server, and it is scoped to a single station on purpose.
-  const detailRes = await fetch(`${BASE}/api/station-data?station=WKTS`);
-  const oneStation = await detailRes.json();
-  const wk = oneStation.station;
-  check("?station=WKTS returns a station detail", Boolean(wk), JSON.stringify(Object.keys(oneStation)));
-  check("?station=WKTS has no stations map", oneStation.stations === undefined);
-  check("detail: day rows merged from the month files", wk?.daily?.length === 15, String(wk?.daily?.length));
-  check("detail: months match the index", JSON.stringify(wk?.months) === JSON.stringify(["2026-10"]));
-  check("detail: day rows sum to the total", near(sum(wk?.daily, "tonnes"), total), String(sum(wk?.daily, "tonnes")));
-  check("detail: daily waste types sum to the total",
-    near(
-      (wk?.daily ?? []).reduce((a, d) => a + d.wasteTypes.reduce((x, w) => x + w.tonnes, 0), 0),
-      total
-    ));
-  check("detail: daily districts sum to the total",
-    near(
-      (wk?.daily ?? []).reduce((a, d) => a + d.districts.reduce((x, v) => x + v.tonnes, 0), 0),
-      total
-    ));
-  check("detail: per-stream loads reconcile",
-    Object.values(streams).every((s) =>
-      (wk?.daily ?? []).reduce((a, d) => a + (d[`${s.key}Loads`] ?? 0), 0) === s.loads
-    ),
-    JSON.stringify(Object.values(streams).map((s) => s.key)));
-  const detailRaw = JSON.stringify(oneStation);
-  check("detail: no account numbers", !detailRaw.includes("賬戶號碼"));
-  check("detail: no licence plates", !detailRaw.includes("車牌"));
-
+  const oneStation = await (await fetch(`${BASE}/api/station-data?station=WKTS`)).json();
+  check("?station=WKTS -> 1 station", Object.keys(oneStation.stations ?? {}).length === 1);
   const byFacility = await (await fetch(`${BASE}/api/station-data?facility=rts-west-kowloon`)).json();
-  check("?facility=rts-west-kowloon -> WKTS detail", byFacility.station?.stationId === "WKTS");
+  check("?facility=rts-west-kowloon -> WKTS", Boolean(byFacility.stations?.WKTS));
   const noCoverage = await fetch(`${BASE}/api/station-data?facility=landfill-went`);
   check("?facility without coverage -> 404", noCoverage.status === 404, String(noCoverage.status));
   const unknownStation = await fetch(`${BASE}/api/station-data?station=ZZZZ`);

@@ -7,8 +7,8 @@
  *      EPD figures and everything else sit behind the Detail toggle, which must
  *      also bring the revealed section into view — it opens ~1,500px down the
  *      drawer's scroller);
- *   3. that no Hong Kong-wide trend panel exists any more — it was removed at
- *      the user's request.
+ *   3. that the Hong Kong-wide trend chart lives in its own panel rather than in
+ *      the drawer.
  * Saves screenshots to out/verify/.
  */
 import path from "node:path";
@@ -28,19 +28,6 @@ const errors = [];
 page.on("pageerror", (err) => errors.push(`pageerror: ${err.message}`));
 page.on("console", (msg) => {
   if (msg.type() === "error") errors.push(`console: ${msg.text()}`);
-});
-
-// Which imagery the opening view pulls, and at what zoom. The default is the
-// Lands Department's own aerial photography, served natively (no tile-zoom
-// nudge) because it is genuinely high-resolution from z13 down to z12. The
-// Esri source is the one that needs the deeper level: its Hong Kong mosaic is
-// coarse at z11-z12 and only becomes real aerial photography from z13.
-const imageryZooms = new Set();
-page.on("request", (req) => {
-  const lands = /xyz\/imagery\/WGS84\/(\d+)\//.exec(req.url());
-  const esri = /World_Imagery\/MapServer\/tile\/(\d+)\//.exec(req.url());
-  if (lands) imageryZooms.add(Number(lands[1]));
-  else if (esri) imageryZooms.add(Number(esri[1]));
 });
 
 const BASE = process.env.BASE ?? "http://localhost:3000";
@@ -76,6 +63,10 @@ const rankingHeader = page.locator("button:not([data-dock-tab])", {
 const legendHeader = page.locator("button:not([data-dock-tab])", {
   hasText: /^Legend$/,
 });
+const trendHeader = page.locator("button:not([data-dock-tab])", {
+  hasText: "Hong Kong-wide annual waste disposal",
+});
+
 // =====================================================================
 // 1. Opening state — everything collapsed, RTS pre-selected
 // =====================================================================
@@ -83,7 +74,7 @@ let bodyText = await page.evaluate(() => document.body.innerText);
 
 check("app title present", /Waste/i.test(bodyText));
 check("three panel headers rendered", (await rankingHeader.count()) === 1 &&
-  (await legendHeader.count()) === 1);
+  (await legendHeader.count()) === 1 && (await trendHeader.count()) === 1);
 
 check("ranking body not rendered", (await page.locator("button", { hasText: /^All$/ }).count()) === 0);
 check("legend body not rendered",
@@ -91,7 +82,7 @@ check("legend body not rendered",
 check("trend chart not rendered", (await page.locator(".recharts-wrapper").count()) === 0);
 
 const chevrons = await Promise.all(
-  [rankingHeader, legendHeader].map(async (h) =>
+  [rankingHeader, legendHeader, trendHeader].map(async (h) =>
     /chevron-down/.test((await h.locator("svg").last().getAttribute("class")) ?? "")
   )
 );
@@ -111,6 +102,7 @@ const layout = await page.evaluate(() => {
   return {
     ranking: at('[data-testid="ranking-sheet"]'),
     legend: at('[data-testid="legend-sheet"]'),
+    trend: at('[data-testid="trend-sheet"]'),
     info: at('[data-testid="map-info"]'),
     toolbar: at('[data-testid="display-toolbar"]'),
     header: at("header"),
@@ -127,8 +119,7 @@ const layout = await page.evaluate(() => {
 });
 check("desktop: ranking card is top-right", layout.ranking.x > 1000 && layout.ranking.y < 120, JSON.stringify(layout.ranking));
 check("desktop: legend card is bottom-left", layout.legend.x < 60 && layout.legend.y > 700, JSON.stringify(layout.legend));
-check("desktop: no trend card anywhere on the map",
-  (await page.locator('[data-testid="trend-sheet"]').count()) === 0);
+check("desktop: trend card is bottom-right", layout.trend.x > 1000 && layout.trend.y > 700, JSON.stringify(layout.trend));
 check("desktop: info button is bottom-left", layout.info.x === 12, JSON.stringify(layout.info));
 check("desktop: phone dock is hidden", layout.dockTabs === 0, `visibleTabs=${layout.dockTabs}`);
 check("desktop: display toolbar is its own row beside the header",
@@ -142,25 +133,20 @@ check("desktop: phone header disclosures are not rendered",
 check("header stats show RTS-only subset (13 facilities)", /(^|\s)13(\s|$)/.test(bodyText) &&
   /facilit/i.test(bodyText), bodyText.match(/FACILITIES[^\n]*\n?[^\n]*/)?.[0] ?? "");
 check("header stats show 6/13 published", bodyText.includes("6/13"));
-// The Lands Department layer is high-resolution at z12 already, so an opening
-// view that reached z12 is enough — unlike Esri, whose z12 is the mushy mosaic.
-check("opening view pulls Lands Department imagery at z12 or deeper",
-  imageryZooms.size > 0 && Math.max(...imageryZooms) >= 12,
-  `zooms=${JSON.stringify([...imageryZooms].sort())}`);
 await page.screenshot({ path: path.join(OUT_DIR, "opening-state-collapsed.png") });
 
 // =====================================================================
-// 2. The Hong Kong-wide trend panel is gone
+// 2. Trend panel — its own card on the map, not inside the drawer
 // =====================================================================
-// Removed at the user's request: EPD publishes no per-facility time series, so
-// a territory-wide series on this map was answering a different question. What
-// has to hold now is that there is no trend header, no chart and no dock tab.
-check("no trend card on the map",
-  (await page.locator('[data-testid="trend-sheet"]').count()) === 0);
-check("no trend card header on the map",
-  (await page.getByRole("button", { name: /hong kong-wide annual waste disposal/i }).count()) === 0);
+await trendHeader.click();
+await page.waitForTimeout(1200);
+bodyText = await page.evaluate(() => document.body.innerText);
+// MetaRow/card labels are CSS-uppercased, so match the rendered casing.
+check("HK-wide trend panel on map", /HONG KONG-WIDE ANNUAL WASTE DISPOSAL/i.test(bodyText));
+check("trend panel states not-facility scope", /Not any single facility/i.test(bodyText));
 const chartsOnMap = await page.locator(".recharts-wrapper").count();
-check("no chart on the map while no drawer is open", chartsOnMap === 0, `charts=${chartsOnMap}`);
+check("one recharts panel (trend card) while no drawer open", chartsOnMap === 1, `charts=${chartsOnMap}`);
+await page.screenshot({ path: path.join(OUT_DIR, "map-with-trend.png") });
 
 // =====================================================================
 // 3. Ranking card under the default RTS filter
@@ -175,44 +161,10 @@ check("All quick filter not selected",
 const rtsRows = await page.locator("aside ul > li").count();
 check("ranking lists 7 RTS entries (6 stations + OITF group)", rtsRows === 7, `rows=${rtsRows}`);
 
-// --- facility cards: short label at rest, full name on hover ---
-// Hovering a row slides the short label out to the right while the full name
-// comes in from the left. innerText reports both, so the assertion is that the
-// full name is present *and* that the rest state showed only the short one.
-const sttsRow = page.locator("aside ul > li button", { hasText: "STTS" }).first();
-check("ranking rows show the abbreviation, not the full name",
-  (await sttsRow.count()) === 1 && !/Shatin Transfer Station/.test(await page.locator("aside ul > li").first().innerText()));
-await sttsRow.hover();
-await page.waitForTimeout(1600);
-check("hovering a card reveals the full name",
-  /Shatin Transfer Station/.test(await sttsRow.innerText()), await sttsRow.innerText());
-
-// --- the three-way style switch, both directions ---
-// Satellite (Esri, light) <-> Aerial (Lands Department, clean) <-> Official.
-check("style switch offers Satellite / Aerial / Official",
-  (await page.getByRole("button", { name: /^Aerial$/ }).count()) === 1);
-const waitForImagery = (host) =>
-  page.waitForRequest((req) => req.url().includes(host) && /\/tile\/|imagery\/WGS84/.test(req.url()), {
-    timeout: 20000,
-  });
-try {
-  const toEsri = waitForImagery("server.arcgisonline.com");
-  await page.getByRole("button", { name: /^Satellite$/ }).click();
-  await toEsri;
-  const toLands = waitForImagery("mapapi.geodata.gov.hk");
-  await page.getByRole("button", { name: /^Aerial$/ }).click();
-  await toLands;
-  check("switching Satellite -> Aerial reloads the imagery source", true);
-} catch (err) {
-  check("switching Satellite -> Aerial reloads the imagery source", false, String(err).slice(0, 120));
-}
-await page.getByRole("button", { name: /^Aerial$/ }).click();
-await page.waitForTimeout(1500);
-
 // =====================================================================
 // 4. Open an RTS drawer: default view must be clean
 // =====================================================================
-const iets = page.locator("button", { hasText: "IETS" }).first();
+const iets = page.locator("button", { hasText: "Island East Transfer Station" }).first();
 check("IETS row present in ranking", (await iets.count()) === 1);
 await iets.click();
 await page.waitForTimeout(1500);
@@ -296,7 +248,7 @@ check("All filter restores 11/19 published", bodyText.includes("11/19"));
 // =====================================================================
 // 7. WENT landfill drawer (void volume)
 // =====================================================================
-const went = page.locator("button", { hasText: "WENT" }).first();
+const went = page.locator("button", { hasText: "West New Territories Landfill" }).first();
 await went.click();
 await page.waitForTimeout(1200);
 const wentDrawer = page.locator('aside[role="dialog"]');
@@ -312,7 +264,7 @@ await page.waitForTimeout(600);
 // =====================================================================
 // 8. OITF expand
 // =====================================================================
-const oitf = page.locator("button", { hasText: "OITF" }).first();
+const oitf = page.locator("button", { hasText: /Outlying Islands Transfer/ }).first();
 if (await oitf.count()) {
   await oitf.click();
   await page.waitForTimeout(800);
@@ -331,7 +283,7 @@ if (await oitf.count()) {
 // also proves the block stays absent for every other station (see the IETS
 // drawer checks in section 4, which assert no chart appears there).
 {
-  const wkts = page.locator("button", { hasText: "WKTS" }).first();
+  const wkts = page.locator("button", { hasText: "West Kowloon Transfer Station" }).first();
   check("WKTS row present in ranking", (await wkts.count()) === 1);
   await wkts.click();
   await page.waitForTimeout(2000);
@@ -697,31 +649,16 @@ if (await oitf.count()) {
   check("mobile: title stays on one line", m.titleLines === 1, `lines=${m.titleLines} text="${m.titleText}"`);
   check("mobile: dock is pinned to the bottom edge", Math.abs(m.dock.bottom - m.vh) <= 1, JSON.stringify(m.dock));
   check(
-    "mobile: dock carries the two remaining tabs, and no trend tab",
+    "mobile: dock carries all three tabs",
     (await tab("list").count()) === 1 &&
       (await tab("legend").count()) === 1 &&
-      (await tab("trend").count()) === 0
+      (await tab("trend").count()) === 1
   );
-  // The facility tab was relabelled from "Ranking" to "Facility". The label is
-  // CSS-uppercased, so match case-insensitively.
-  check("mobile: facility tab is labelled Facility",
-    /facility/i.test(await tab("list").innerText()), await tab("list").innerText());
-  // The map "i" sits centred in the dock now, not pinned to its right edge.
-  const infoBox = await mobile.evaluate(() => {
-    const el = document.querySelector('[data-testid="map-info"]');
-    const dock = document.querySelector('[data-testid="bottom-dock"]');
-    if (!el || !dock) return null;
-    const e = el.getBoundingClientRect();
-    const d = dock.getBoundingClientRect();
-    return { eMid: e.x + e.width / 2, dMid: d.x + d.width / 2, w: d.width };
-  });
-  check("mobile: map info button is centred in the dock",
-    infoBox ? Math.abs(infoBox.eMid - infoBox.dMid) < infoBox.w * 0.08 : false,
-    JSON.stringify(infoBox));
   check(
     "mobile: no sheet is open on load",
     !(await sheetShown("ranking-sheet")) &&
-      !(await sheetShown("legend-sheet"))
+      !(await sheetShown("legend-sheet")) &&
+      !(await sheetShown("trend-sheet"))
   );
   check("mobile: no horizontal overflow", m.scrollW <= m.vw, `scrollW=${m.scrollW} vw=${m.vw}`);
 
@@ -861,35 +798,24 @@ if (await oitf.count()) {
   check("mobile: sheets are mutually exclusive", !(await sheetShown("ranking-sheet")));
   await mobile.screenshot({ path: path.join(OUT_DIR, "mobile-390-sheet-legend.png") });
 
-  // Tapping the active tab again must close it, leaving the map alone.
-  await tab("legend").click();
-  await mobile.waitForTimeout(700);
-  check("mobile: tapping the active tab closes its sheet", !(await sheetShown("legend-sheet")));
+  await tab("trend").click();
+  await mobile.waitForTimeout(1200);
+  const charts = await mobile.locator(".recharts-wrapper").count();
+  check("mobile: trend tab renders the chart", charts === 1, `charts=${charts}`);
+  check("mobile: trend sheet is on screen", await sheetShown("trend-sheet"));
+  await mobile.screenshot({ path: path.join(OUT_DIR, "mobile-390-sheet-trend.png") });
 
-  // Moving the map must collapse whatever sheet is open: the sheets cover most
-  // of the map, so dragging underneath one is pointless. The guard is that the
-  // app's own camera moves (selecting a site, Reset view) must NOT close them,
-  // which is why the map reports gestures only.
-  await tab("list").click();
-  await mobile.waitForTimeout(900);
-  check("mobile: list sheet opens for the drag test", await sheetShown("ranking-sheet"));
-  await mobile.mouse.move(200, 300);
-  await mobile.mouse.down();
-  await mobile.mouse.move(140, 210, { steps: 12 });
-  await mobile.mouse.up();
-  await mobile.waitForTimeout(900);
-  check("mobile: dragging the map collapses the open sheet", !(await sheetShown("ranking-sheet")));
-  // And selecting a site afterwards must still fly the camera without the
-  // sheet snapping shut mid-way through opening it.
-  await tab("list").click();
-  await mobile.waitForTimeout(900);
-  check("mobile: sheet reopens after the drag", await sheetShown("ranking-sheet"));
+  // Tapping the active tab again must close it, leaving the map alone.
+  await tab("trend").click();
+  await mobile.waitForTimeout(700);
+  check("mobile: tapping the active tab closes its sheet", !(await sheetShown("trend-sheet")));
 
   // The weighbridge block has to survive the phone drawer too — it is the
   // densest thing in the app, and the mobile drawer is a bottom sheet rather
-  // than the desktop side panel. The sheet is already open from the drag test
-  // above, so tapping the tab again would close it (the dock is an accordion).
-  await mobile.locator("button", { hasText: "WKTS" }).first().click();
+  // than the desktop side panel.
+  await tab("list").click();
+  await mobile.waitForTimeout(1000);
+  await mobile.locator("button", { hasText: "West Kowloon Transfer Station" }).first().click();
   await mobile.waitForTimeout(2500);
   const mobileWb = await mobile.evaluate(() => {
     const sec = document.querySelector('[data-testid="weighbridge-section"]');

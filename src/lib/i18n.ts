@@ -21,8 +21,7 @@ const DICT = {
   // Short labels for the phone bottom dock. The full card titles ("Reported
   // throughput by facility", "Hong Kong-wide annual waste disposal") are far
   // too long to sit side by side in a tab bar.
-  /** Bottom-dock tab label. The card it opens lists every facility. */
-  dockRanking: ["Facility", "設施"],
+  dockRanking: ["Ranking", "排名"],
   dockLegend: ["Legend", "圖例"],
   dockTrend: ["Trend", "趨勢"],
   notPublished: ["N/A", "未公布"],
@@ -55,8 +54,6 @@ const DICT = {
 
   // OITF group row in the intake card
   oitfShort: ["Outlying Islands Transfer Facilities", "離島廢物轉運設施"],
-  /** Short form of `oitfShort`, for the collapsed group row in the ranking. */
-  oitfAbbr: ["OITF", "OITF"],
   oitfStations: ["stations", "個轉運設施"],
   expandGroup: ["Show substations", "展開各轉運設施"],
   collapseGroup: ["Hide substations", "收起各轉運設施"],
@@ -83,10 +80,6 @@ const DICT = {
     "© Lands Department, HKSAR Government",
     "© 香港特別行政區政府地政總署",
   ],
-  infoAttributionAerial: [
-    "Imagery © Lands Department, HKSAR Government · Labels © Esri, Maxar, Earthstar Geographics",
-    "影像 © 香港特別行政區政府地政總署 · 標註 © Esri、Maxar、Earthstar Geographics",
-  ],
   infoDataNote: [
     "Facility coordinates, names, addresses and published throughput are from EPD. Seven OITF sites have no per-site rate; the group row shows EPD's combined ~90 tpd. Historical chart is territory-wide annual data, not facility history.",
     "設施位置、名稱、地址及已公布處理量取自環保署。七個離島設施均無各站處理量；群組列顯示環保署公布的合計約每日 90 公噸。歷史圖表為全港年度數據，並非個別設施紀錄。",
@@ -105,7 +98,6 @@ const DICT = {
   noFacilityHistory: ["EPD does not publish annual throughput history by facility.", "環保署並無公布個別設施的年度處理量歷史數據。"],
   tpd: ["tpd", "公噸／日"],
   satellite: ["Satellite", "衛星圖"],
-  aerial: ["Aerial", "航拍圖"],
   officialMap: ["Official", "官方"],
   officialMapFull: [
     "Lands Department Official Map",
@@ -119,10 +111,7 @@ const DICT = {
   showLegend: ["Show legend", "顯示圖例"],
   hideLegend: ["Hide legend", "隱藏圖例"],
   heightByThroughput: ["Pillar height = published throughput; short marker = no site figure", "柱高＝已公布處理量；短柱＝未公布各站數據"],
-  colourByCategory: [
-    "Pillar colour = facility type; each site has its own shade",
-    "柱色＝設施類別；每個設施各有色調",
-  ],
+  colourByCategory: ["Pillar colour = facility type", "柱色＝設施類別"],
   clickHint: ["Click a pillar for facility detail", "點擊柱狀標記查看設施詳情"],
   resetView: ["Reset view", "重設視角"],
   designCapacity: ["Design capacity", "設計處理量"],

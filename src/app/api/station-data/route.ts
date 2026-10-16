@@ -2,9 +2,8 @@ import { NextResponse } from "next/server";
 import {
   WEIGHBRIDGE_DATA,
   WEIGHBRIDGE_STATION_IDS,
-  findStationSummary,
-  findStationSummaryByFacilityId,
-  stationWithDays,
+  findStationRecords,
+  findStationRecordsByFacilityId,
 } from "@/lib/weighbridge";
 
 /**
@@ -17,23 +16,14 @@ import {
  * throughput; this one carries real measured tonnage for the stations that
  * report it. Keeping them apart stops the two sources being read as one.
  *
- * Two levels, because the data is stored per station-month and a three-year
- * search should not have to download every station to show one:
- *
- *   (no query)   the index — every station's period, totals, stream split and
- *                both ranked lists, with no day rows. Grows with the number of
- *                stations, not with the number of days recorded.
- *   ?station=    one station with its month files merged in, day rows included.
- *                Fetched only when a station's drawer is actually opened.
- *
  * Query parameters
- *   (none)                  The index: every station, without day rows
- *   ?station=WKTS           One station, by operator code, with day rows
- *   ?facility=rts-west-kowloon   One station, by map facility id, with day rows
+ *   (none)                  Every station with weighbridge coverage
+ *   ?station=WKTS           One station, by operator code
+ *   ?facility=rts-west-kowloon   One station, by map facility id
  *   ?pretty=1               Pretty-print the JSON
  *
  * Responses
- *   200 application/json   { meta, stations } or { meta, station }
+ *   200 application/json   { meta, stations }
  *   404 application/json   Unknown station / facility, or no coverage for it
  *   500 application/json   Unexpected failure
  */
@@ -72,43 +62,39 @@ export async function GET(request: Request) {
     const stationParam = searchParams.get("station");
     const facilityParam = searchParams.get("facility");
 
-    // A station query also merges its month files in, so the response is the
-    // complete station. The index alone stays small; the day rows are only
-    // ever served for one station at a time.
-    const detail = stationParam
-      ? stationWithDays(stationParam)
-      : facilityParam
-        ? findStationSummaryByFacilityId(facilityParam)?.stationId
-          ? stationWithDays(findStationSummaryByFacilityId(facilityParam)!.stationId)
-          : null
-        : null;
+    let stations = WEIGHBRIDGE_DATA.stations;
 
-    if (stationParam && !findStationSummary(stationParam)) {
-      return jsonError(
-        404,
-        "STATION_NOT_FOUND",
-        `No weighbridge coverage for station "${stationParam}".`,
-        { stationsWithCoverage: WEIGHBRIDGE_STATION_IDS }
-      );
-    }
-    if (facilityParam && !findStationSummaryByFacilityId(facilityParam)) {
-      return jsonError(
-        404,
-        "NO_WEIGHBRIDGE_COVERAGE",
-        `No weighbridge coverage for facility "${facilityParam}".`,
-        {
-          stationsWithCoverage: WEIGHBRIDGE_STATION_IDS,
-          facilitiesWithCoverage: Object.values(WEIGHBRIDGE_DATA.stations).map(
-            (s) => s.facilityId
-          ),
-        }
-      );
+    if (stationParam) {
+      const found = findStationRecords(stationParam);
+      if (!found) {
+        return jsonError(
+          404,
+          "STATION_NOT_FOUND",
+          `No weighbridge coverage for station "${stationParam}".`,
+          { stationsWithCoverage: WEIGHBRIDGE_STATION_IDS }
+        );
+      }
+      stations = { [found.stationId]: found };
+    } else if (facilityParam) {
+      const found = findStationRecordsByFacilityId(facilityParam);
+      if (!found) {
+        return jsonError(
+          404,
+          "NO_WEIGHBRIDGE_COVERAGE",
+          `No weighbridge coverage for facility "${facilityParam}".`,
+          {
+            stationsWithCoverage: WEIGHBRIDGE_STATION_IDS,
+            facilitiesWithCoverage: Object.values(WEIGHBRIDGE_DATA.stations).map(
+              (s) => s.facilityId
+            ),
+          }
+        );
+      }
+      stations = { [found.stationId]: found };
     }
 
     const body = JSON.stringify(
-      detail
-        ? { meta: WEIGHBRIDGE_DATA.meta, station: detail }
-        : { meta: WEIGHBRIDGE_DATA.meta, stations: WEIGHBRIDGE_DATA.stations },
+      { meta: WEIGHBRIDGE_DATA.meta, stations },
       null,
       pretty ? 2 : 0
     );

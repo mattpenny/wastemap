@@ -16,7 +16,7 @@ import { AmbientLight, DirectionalLight, LightingEffect } from "@deck.gl/core";
 import type { PickingInfo } from "@deck.gl/core";
 
 import type { FacilityCategory, FacilityProperties } from "@/data/waste-facilities";
-import { CATEGORY_META, CATEGORY_ORDER, facilityColorMap } from "@/lib/categories";
+import { CATEGORY_META, CATEGORY_ORDER } from "@/lib/categories";
 import { t, type Lang } from "@/lib/i18n";
 import { formatNumber } from "@/lib/utils";
 import {
@@ -47,11 +47,6 @@ interface WasteMap3DProps {
   visibleCategories: FacilityCategory[];
   /** When true, show a "no facilities" hint instead of an empty map. */
   emptyHint?: boolean;
-  /**
-   * Fired when the *user* pans, zooms or rotates — never for the app's own
-   * camera moves. The phone shell uses it to collapse its panels.
-   */
-  onUserMove?: () => void;
 }
 
 /**
@@ -64,13 +59,6 @@ interface WasteMap3DProps {
  */
 const MIN_HEIGHT_M = 260;
 const MAX_HEIGHT_M = 2000;
-
-/**
- * Zoom the pillar footprint is tuned for — the overview the app opens on. Not
- * `HK_ZOOM`, which is the reference for column *height*; the two are separate
- * on purpose, because the height reference was chosen for a different reason.
- */
-const OVERVIEW_ZOOM = 12.2;
 
 /**
  * ColumnLayer takes a single uniform `radius` per layer (it has no
@@ -106,15 +94,12 @@ function pinDataUri(fill: string): string {
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
 
-/** Pin art is per colour, so the selected site keeps its own shade. */
-const pinIconCache = new Map<string, string>();
-function pinIcon(hex: string): string {
-  const cached = pinIconCache.get(hex);
-  if (cached) return cached;
-  const uri = pinDataUri(hex);
-  pinIconCache.set(hex, uri);
-  return uri;
-}
+const PIN_ICONS: Record<FacilityCategory, string> = Object.fromEntries(
+  CATEGORY_ORDER.map((category) => [
+    category,
+    pinDataUri(CATEGORY_META[category].hex),
+  ])
+) as Record<FacilityCategory, string>;
 
 const PIN_ICON_SIZE = { width: 64, height: 80, anchorX: 32, anchorY: 80 };
 
@@ -137,7 +122,6 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
     lang,
     visibleCategories,
     emptyHint = false,
-    onUserMove,
   },
   ref
 ) {
@@ -149,8 +133,6 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
   // latest selection handler in a ref.
   const onSelectRef = useRef(onSelectFacility);
   onSelectRef.current = onSelectFacility;
-  const onUserMoveRef = useRef(onUserMove);
-  onUserMoveRef.current = onUserMove;
 
   /**
    * Which style is currently rendered. The Lands Department official map ships
@@ -210,30 +192,6 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
     return Math.max(0.05, Math.min(1.8, raw));
   }, [zoom]);
 
-  /**
-   * Same idea for the pillars' *footprint*, which used to be fixed in metres.
-   *
-   * Height was already compensated for zoom; the radius was not, so zooming in
-   * to a site turned its column into a cylinder hundreds of pixels across that
-   * covered the very thing it was marking. This keeps the on-screen footprint
-   * roughly constant instead. The reference is the overview zoom rather than
-   * HK_ZOOM (which exists to keep the columns' height stable), because the
-   * overview is where the footprint has to read as a marker. Floored so a
-   * column never thins to a hairline at maximum zoom.
-   */
-  const radiusScale = useMemo(() => {
-    const raw = Math.pow(2, OVERVIEW_ZOOM - zoom);
-    return Math.max(0.16, Math.min(1.4, raw));
-  }, [zoom]);
-
-  /** Per-facility colour, so no two sites share a marker. */
-  const facilityColors = useMemo(() => facilityColorMap(facilities), [facilities]);
-  const colorOf = useCallback(
-    (f: FacilityProperties): [number, number, number] =>
-      facilityColors.get(f.id)?.rgb ?? CATEGORY_META[f.category].color,
-    [facilityColors]
-  );
-
   // ------------------------------------------------------------------
   // Build the deck.gl layer set
   // ------------------------------------------------------------------
@@ -241,31 +199,31 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
     const selected = shown.find((f) => f.id === selectedId) ?? null;
 
     // The selected facility is drawn as a map pin rather than a pillar, so it
-    // is removed from the column data entirely — and from the ground disc too,
-    // so the pin is the only mark left on it.
-    const selectedOut = selectedId
+    // is removed from the column data entirely.
+    const columnData = selectedId
       ? shown.filter((f) => f.id !== selectedId)
       : shown;
-    const columnData = selectedOut;
 
     // Glowing ground disc under every pillar — anchors the columns visually
     // and gives a reliable click target at shallow pitch angles.
     const baseLayer = new ScatterplotLayer<FacilityProperties>({
       id: "facility-base",
-      data: selectedOut,
+      data: shown,
       pickable: true,
       stroked: true,
       filled: true,
       radiusUnits: "meters",
       lineWidthUnits: "meters",
       getPosition: (d) => d.coordinates,
-      getRadius: (d) => CATEGORY_RADIUS_M[d.category] * 1.3 * radiusScale,
-      // Colour identifies the SITE within its category's hue band — the
-      // category still reads at a glance, and no two facilities share a marker.
-      // Utilisation is surfaced numerically in the tooltip, the drawer and the
-      // header stats.
-      getFillColor: (d) => [...colorOf(d), 80],
-      getLineColor: (d) => (d.id === selectedId ? [255, 255, 255, 235] : [...colorOf(d), 205]),
+      getRadius: (d) => CATEGORY_RADIUS_M[d.category] * 1.3,
+      // Colour encodes the facility GROUP, so each type reads as its own
+      // colour across the map. Utilisation is still surfaced numerically in the
+      // tooltip, the drawer and the header stats.
+      getFillColor: (d) => [...CATEGORY_META[d.category].color, 80],
+      getLineColor: (d) =>
+        d.id === selectedId
+          ? [255, 255, 255, 235]
+          : [...CATEGORY_META[d.category].color, 205],
       getLineWidth: (d) => (d.id === selectedId ? 34 : 16),
       transitions: { getRadius: 500 },
     });
@@ -281,11 +239,11 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
           extruded: true,
           diskResolution: 24,
           radiusUnits: "meters",
-          radius: CATEGORY_RADIUS_M[cat] * radiusScale,
+          radius: CATEGORY_RADIUS_M[cat],
           elevationScale,
           getPosition: (d) => d.coordinates,
           getElevation: (d) => heightFor(d),
-          getFillColor: (d) => [...colorOf(d), 245],
+          getFillColor: (d) => [...CATEGORY_META[d.category].color, 245],
           stroked: true,
           getLineColor: () => [255, 255, 255, 60],
           lineWidthUnits: "meters",
@@ -312,7 +270,7 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
           sizeUnits: "pixels",
           getSize: PIN_SIZE_PX,
           getPosition: (d) => d.coordinates,
-          getIcon: (d) => ({ url: pinIcon(facilityColors.get(d.id)?.hex ?? CATEGORY_META[d.category].hex), ...PIN_ICON_SIZE }),
+          getIcon: (d) => ({ url: PIN_ICONS[d.category], ...PIN_ICON_SIZE }),
           // Force HTMLImageElement decoding: SVG sources can come back blank
           // when luma.gl decodes them through ImageBitmap.
           loadOptions: { image: { type: "image" } },
@@ -321,7 +279,7 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
       : null;
 
     return [baseLayer, ...columnLayers, ...(pinLayer ? [pinLayer] : [])];
-  }, [shown, selectedId, heightFor, elevationScale, radiusScale, colorOf, facilityColors]);
+  }, [shown, selectedId, heightFor, elevationScale]);
 
   // ------------------------------------------------------------------
   // Initialise the map exactly once
@@ -333,12 +291,7 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
       container: containerRef.current,
       style: styleFor(mapStyle, lang),
       center: HK_CENTER,
-      // Start at the zoom the framing will settle on. Creating the map at
-      // HK_ZOOM (10.6) meant the first thing it did was request a whole level
-      // of tiles at z11, throw them away, and ask for z12 — a few hundred
-      // wasted requests on every load, and a visible tile-level swap when the
-      // framing jumped.
-      zoom: isSmallScreen() ? 11.4 : OVERVIEW_ZOOM,
+      zoom: isSmallScreen() ? 9.6 : HK_ZOOM,
       pitch: isSmallScreen() ? 40 : HK_PITCH,
       bearing: HK_BEARING,
       maxPitch: 75,
@@ -423,27 +376,10 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
     };
     map.on("click", handleBackgroundClick);
 
-    /**
-     * Tell the shell when the *user* moves the map.
-     *
-     * `originalEvent` is the guard that matters: it is set for gestures — drag,
-     * wheel, pinch, keyboard — and absent for the programmatic camera moves the
-     * app makes itself (the opening fit, Reset view, focusing a facility). Only
-     * the former should collapse the phone's panels; closing a sheet the moment
-     * it opens, because selecting a site flew the camera, would be maddening.
-     */
-    const handleUserMove = (e: { originalEvent?: unknown }) => {
-      if (e.originalEvent) onUserMoveRef.current?.();
-    };
-    map.on("movestart", handleUserMove);
-    map.on("zoomstart", handleUserMove);
-
     return () => {
       window.clearTimeout(readyFallback);
       map.off("zoom", handleZoom);
       map.off("click", handleBackgroundClick);
-      map.off("movestart", handleUserMove);
-      map.off("zoomstart", handleUserMove);
       if (overlayRef.current) {
         map.removeControl(overlayRef.current as unknown as maplibregl.IControl);
         overlayRef.current = null;

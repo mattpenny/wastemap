@@ -24,22 +24,10 @@ import type { StyleSpecification } from "maplibre-gl";
  * terms of use, so it is baked into the style.
  */
 
-export type MapStyleId = "official" | "satellite" | "aerial";
+export type MapStyleId = "official" | "satellite";
 
-/**
- * The Lands Department's own aerial photography is the default.
- *
- * Esri's World Imagery over Hong Kong is a multi-date mosaic: it carries
- * visible cloud shadows (measured over the sea south-west of Lamma, Esri reads
- * ~31 luminance where the Lands Department's survey reads ~78 across the same
- * tiles) and hard tile seams, and the water gets darker again at z14, which is
- * what made the map look like it was flashing when a camera move crossed a tile
- * level. LandsD is one agency's survey, so it is consistent and shadow-free.
- * It costs more — PNG only, ~161 KB a tile — but with the opening view pulling
- * a single tile level the load is comparable, and the imagery is the point of
- * the satellite view. Esri stays available as the lighter "Satellite" option.
- */
-export const DEFAULT_MAP_STYLE: MapStyleId = "aerial";
+/** Satellite is the default view. */
+export const DEFAULT_MAP_STYLE: MapStyleId = "satellite";
 
 export type MapLang = "en" | "zh";
 
@@ -115,27 +103,7 @@ export function satelliteStyle(): StyleSpecification {
         tiles: [
           "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
         ],
-        /**
-         * Declared 128, though the service serves 256px images.
-         *
-         * Esri's World Imagery mosaic over Hong Kong is two different datasets:
-         * z11-z12 are a coarse, visibly mushy layer (a 12KB tile for the whole
-         * harbour), while z13 and deeper are genuine high-resolution aerial
-         * photography (the same area is crisp — individual buildings, piers and
-         * boats). The opening view sits right on that boundary and used to pull
-         * z11/z12, which is why the map read as blurry.
-         *
-         * MapLibre picks the tile zoom from the declared `tileSize`, so halving
-         * it makes the map ask for one level deeper — z13/z14 at the same
-         * camera — and draw each 256px image into half the screen area. The
-         * result is a 2x supersampled basemap: measurably sharper, at ~3x the
-         * tile requests (1.7 MB → 5.5 MB for the opening view, then cached).
-         * That trade is worth it here; the imagery is the whole point of the
-         * satellite style.
-         *
-         * Only the imagery is nudged — the label layer stays on its own zoom.
-         */
-        tileSize: 128,
+        tileSize: 256,
         maxzoom: 19,
         attribution: ESRI_ATTRIBUTION,
       },
@@ -168,80 +136,16 @@ export function satelliteStyle(): StyleSpecification {
            *   z11  mean luminance 54.8, 18.6% near-black pixels
            *   z12  mean luminance 68-85, 0.1-0.9% near-black pixels
            *
-           * Those near-black patches read as large "shadows" with tile-aligned
-           * edges, so the black point is raised and contrast eased to remove
-           * them. It has to fade out by z12.5, though: lifting the black point
-           * and flattening contrast on good imagery is exactly what makes it
-           * look washed out and soft, and every zoom the app now opens at is
-           * past that point. Keyed on camera zoom, not tile zoom.
+           * The default view renders z11 tiles, so those near-black patches read
+           * as large "shadows" across the map with tile-aligned edges. Raising
+           * the black point and easing contrast removes them at every zoom
+           * without washing the imagery out.
            */
-          "raster-brightness-min": ["interpolate", ["linear"], ["zoom"], 10, 0.16, 12.5, 0],
+          "raster-brightness-min": 0.16,
           "raster-brightness-max": 1,
-          "raster-contrast": ["interpolate", ["linear"], ["zoom"], 10, -0.15, 12.5, 0],
-          "raster-saturation": ["interpolate", ["linear"], ["zoom"], 10, 0.05, 12.5, 0],
+          "raster-contrast": -0.15,
+          "raster-saturation": 0.05,
         },
-      },
-      {
-        id: "places",
-        type: "raster",
-        source: "labels",
-        paint: { "raster-fade-duration": 0, "raster-opacity": 0.88 },
-      },
-    ],
-  };
-}
-
-/**
- * Lands Department aerial imagery (官方航拍).
- *
- * The same MapAPI the official cartographic map uses, on its `imagery` layer.
- * Worth having as its own style because Esri's World Imagery over Hong Kong is
- * a multi-date mosaic: it carries visible cloud shadows (measured over the sea
- * south-west of Lamma, Esri reads ~31 luminance where the Lands Department's
- * own survey reads ~78 across the same tiles) and hard tile seams. This layer
- * is one agency's survey, so it is consistent — and it is the official record
- * for the territory.
- *
- * The catch, and the reason it is not the default: it is served as PNG only
- * (`.jpg`/`.webp` both 404) at ~161 KB a tile against Esri's ~10 KB, which is
- * ~22 MB for the opening view instead of 1.7 MB. It is a deliberate opt-in.
- */
-export function aerialStyle(): StyleSpecification {
-  return {
-    version: 8,
-    sources: {
-      imagery: {
-        type: "raster",
-        tiles: [`${HKG_MAPAPI}/imagery/WGS84/{z}/{x}/{y}.png`],
-        // Native 256 — this imagery is genuinely high-resolution at z13+, so
-        // unlike the Esri source it needs no tile-zoom nudge.
-        tileSize: 256,
-        maxzoom: 19,
-        attribution: LANDSD_ATTRIBUTION,
-      },
-      labels: {
-        type: "raster",
-        tiles: [
-          "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
-        ],
-        tileSize: 256,
-        maxzoom: 19,
-        attribution: ESRI_ATTRIBUTION,
-      },
-    },
-    layers: [
-      {
-        id: "background",
-        type: "background",
-        paint: { "background-color": "#0b1220" },
-      },
-      {
-        id: "aerial",
-        type: "raster",
-        source: "imagery",
-        // A short fade rather than none: a camera move crosses tile levels, and
-        // an instant swap is what made the map look like it was flashing.
-        paint: { "raster-fade-duration": 250 },
       },
       {
         id: "places",
@@ -257,9 +161,6 @@ export function styleFor(
   id: MapStyleId,
   lang: MapLang = "en"
 ): StyleSpecification | string {
-  if (id === "aerial") {
-    return aerialStyle();
-  }
   if (id === "satellite") {
     // A Mapbox token, if supplied, upgrades the satellite slot to a hybrid
     // satellite-streets style; otherwise the key-less Esri stack is used.
