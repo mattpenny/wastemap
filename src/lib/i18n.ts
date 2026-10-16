@@ -138,6 +138,47 @@ const DICT = {
   noFacilities: ["No facilities match this filter", "沒有符合篩選條件的設施"],
   language: ["Language", "語言"],
   mapStyle: ["Map style", "地圖樣式"],
+
+  // Weighbridge records — measured station intake, a different source from the
+  // EPD facility register. Kept in its own labelled block so the two are never
+  // read as one.
+  weighbridgeTitle: ["Weighbridge records", "地磅記錄"],
+  weighbridgeSubtitle: ["Measured intake", "實測接收量"],
+  weighbridgeSourceNote: [
+    "Operator weighbridge records, not an EPD publication. Completed weigh-ins only; the station's own maintenance loads are excluded.",
+    "營運方地磅記錄，並非環保署公布數據。只計已完成過磅記錄，轉運站自身維護車載重不計入。",
+  ],
+  weighbridgePeriod: ["Period", "期間"],
+  weighbridgeDays: ["Operating days", "運作日數"],
+  weighbridgeLoads: ["Weigh-ins", "過磅次數"],
+  weighbridgeTotal: ["Total received", "總接收量"],
+  weighbridgePerDay: ["Average per day", "每日平均"],
+  weighbridgeDaily: ["Daily intake", "每日接收量"],
+  weighbridgeStreams: ["Who delivers it", "來源類別"],
+  weighbridgeWasteTypes: ["Waste type", "廢物類別"],
+  weighbridgeDistricts: ["Source district", "來源地區"],
+  weighbridgeMaintenance: ["Station maintenance", "站內維護"],
+  weighbridgeMaintenanceNote: [
+    "The station's own maintenance-vehicle loads. Reported for completeness, excluded from the intake figures above.",
+    "轉運站自身維護車的載重。為求完整而列出，但不計入上列接收數字。",
+  ],
+  weighbridgeGtwNote: [
+    "WKTS is the only transfer station that takes grease trap waste.",
+    "西九龍轉運站是唯一接收隔油池廢物的轉運站。",
+  ],
+  weighbridgeExcluded: [
+    "Excluded: {n} cancelled or rejected weigh-ins.",
+    "已剔除：{n} 筆取消或拒絕的過磅記錄。",
+  ],
+  weighbridgeVsPublished: [
+    "Measured {measured} tonnes/day, against an EPD published rate of {published} ({delta}). These are different kinds of figure: one is what the station actually received, the other is the published rate.",
+    "地磅實測每日 {measured} 公噸，環保署公布處理量為 {published}（{delta}）。兩者性質不同：前者為實際接收量，後者為公布處理量。",
+  ],
+  streamPrivate: ["Private vehicles", "私人車"],
+  streamPublic: ["FEHD / public", "食環署"],
+  streamGtw: ["Grease trap waste", "隔油池廢物"],
+  tonnes: ["tonnes", "公噸"],
+  loadsUnit: ["loads", "車次"],
 } as const;
 
 export type DictKey = keyof typeof DICT;

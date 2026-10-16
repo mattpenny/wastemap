@@ -43,3 +43,9 @@ next-env.d.ts
 
 # WorkBuddy agent workspace: project memory and session data, not app source
 /.workbuddy-ai/
+
+# Raw station weighbridge exports. These are per-weigh-in records carrying
+# account numbers and licence plates, so they must never reach this public
+# repo. The ingest script writes an aggregate with neither, to
+# src/data/weighbridge.json, and THAT is what gets committed.
+/data/

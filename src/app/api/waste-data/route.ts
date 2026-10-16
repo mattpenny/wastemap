@@ -59,6 +59,7 @@ interface GeoJsonFeatureCollection {
     throughputSource: string;
     oitfSource: string;
     facilityPageSource: string;
+    weighbridgeSource: string;
     datasetUpdatedAt: string;
     disclaimerEn: string;
     disclaimerZh: string;

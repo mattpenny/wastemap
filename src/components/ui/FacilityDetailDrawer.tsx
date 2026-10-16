@@ -21,16 +21,20 @@ import {
 } from "lucide-react";
 
 import type { DetailLabelKey, FacilityProperties } from "@/data/waste-facilities";
+import type { WeighbridgeStation } from "@/lib/weighbridge";
 import { CATEGORY_META } from "@/lib/categories";
 import { pick, t, type Lang } from "@/lib/i18n";
 import { cn, formatNumber } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
+import WeighbridgeSection from "@/components/ui/WeighbridgeSection";
 
 interface FacilityDetailDrawerProps {
   facility: FacilityProperties | null;
   isOpen: boolean;
   onClose: () => void;
   lang: Lang;
+  /** Measured intake, when this station reports weighbridge data. */
+  weighbridge?: WeighbridgeStation | null;
 }
 
 /** Icons for the optional EPD facility-page detail rows. */
@@ -104,6 +108,7 @@ export default function FacilityDetailDrawer({
   isOpen,
   onClose,
   lang,
+  weighbridge,
 }: FacilityDetailDrawerProps) {
   /** The default drawer is just the headline figures; metadata sits behind this. */
   const [detailOpen, setDetailOpen] = React.useState(false);
@@ -263,6 +268,20 @@ export default function FacilityDetailDrawer({
               </div>
             )}
           </section>
+
+          {/* Measured intake from the station's own weighbridge. A different
+              source from the EPD figures above — real per-weigh-in records,
+              not a published rate — so it is a separate, clearly labelled
+              block rather than another tile in the grid. */}
+          {weighbridge && (
+            <div data-testid="weighbridge-section">
+              <WeighbridgeSection
+                records={weighbridge}
+                lang={lang}
+                publishedTpd={facility.throughputTonnesPerDay}
+              />
+            </div>
+          )}
 
           {/* Everything else is one tap away behind the Detail toggle. */}
           {detailOpen && (

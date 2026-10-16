@@ -28,6 +28,7 @@ import type {
 } from "@/data/waste-facilities";
 import { CATEGORY_META, CATEGORY_ORDER } from "@/lib/categories";
 import { t, type Lang } from "@/lib/i18n";
+import type { WeighbridgeDataset, WeighbridgeStation } from "@/lib/weighbridge";
 import { cn, formatNumber } from "@/lib/utils";
 
 /** Shape of a single feature as returned by `/api/waste-data`. */
@@ -264,6 +265,14 @@ export default function HomePage() {
   const [fontScale, setFontScale] = useState(FONT_SCALE_DEFAULT);
   /** OITF and any other grouped facilities start collapsed. */
   const [expandedGroups, setExpandedGroups] = useState<string[]>([]);
+  /**
+   * Measured intake, keyed by station code, from `/api/station-data`. Only the
+   * stations that report weighbridge data appear here; the rest simply have no
+   * entry, and the drawer omits the section.
+   */
+  const [stationRecords, setStationRecords] = useState<
+    Record<string, WeighbridgeStation>
+  >({});
 
   // Drive the CSS variable that every text size in the chrome multiplies by.
   useEffect(() => {
@@ -302,6 +311,32 @@ export default function HomePage() {
         setError(err instanceof Error ? err.message : "Unknown error");
       } finally {
         if (!controller.signal.aborted) setLoading(false);
+      }
+    }
+
+    load();
+    return () => controller.abort();
+  }, []);
+
+  // ------------------------------------------------------------------
+  // Load the measured station intake (operator weighbridge records)
+  // ------------------------------------------------------------------
+  // A separate source from the EPD facility register above, and a separate
+  // request, so a failure here cannot take the map down with it — the
+  // weighbridge block simply does not render.
+  useEffect(() => {
+    const controller = new AbortController();
+
+    async function load() {
+      try {
+        const res = await fetch("/api/station-data", { signal: controller.signal });
+        if (!res.ok) throw new Error(`Request failed with status ${res.status}`);
+        const data: WeighbridgeDataset = await res.json();
+        setStationRecords(data.stations ?? {});
+      } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        console.warn("[waste-map] Weighbridge data unavailable:", err);
+        setStationRecords({});
       }
     }
 
@@ -544,6 +579,21 @@ export default function HomePage() {
   // the `!drawerOpen` branch below — which would make `selected?.id` a `never`.
   const selectedId = selected?.id ?? null;
   const drawerOpen = selected !== null;
+
+  /**
+   * Weighbridge records for whichever station is open, if it reports any.
+   *
+   * Matched on the station's `facilityId` rather than its name, so renaming a
+   * facility cannot silently detach its data.
+   */
+  const selectedStationRecords = useMemo<WeighbridgeStation | null>(() => {
+    if (!selectedId) return null;
+    for (const station of Object.values(stationRecords)) {
+      if (station.facilityId === selectedId) return station;
+    }
+    return null;
+  }, [selectedId, stationRecords]);
+
   return (
     <main className="relative h-[100dvh] w-full overflow-hidden bg-slate-950">
       {/* ---------------- Map column ---------------- */}
@@ -1125,6 +1175,7 @@ export default function HomePage() {
         isOpen={drawerOpen}
         onClose={handleClose}
         lang={lang}
+        weighbridge={selectedStationRecords}
       />
     </main>
   );

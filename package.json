@@ -10,7 +10,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "ingest": "node scripts/ingest-weighbridge.mjs"
   },
   "dependencies": {
     "@deck.gl/core": "^9.4.0",

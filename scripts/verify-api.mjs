@@ -110,6 +110,112 @@ function check(name, cond, detail = "") {
   const notFound = await fetch(`${BASE}/api/waste-data?id=does-not-exist`);
   check("?id=unknown -> 404", notFound.status === 404, String(notFound.status));
 
+  // =====================================================================
+  // /api/station-data — measured intake from operator weighbridge records
+  // =====================================================================
+  // A different source from /api/waste-data: EPD publishes no per-facility
+  // throughput, these are real per-weigh-in records. The two must stay
+  // separate, so this payload must never leak into the facility register.
+  check("EPD metadata carries weighbridgeSource", typeof md.weighbridgeSource === "string" && md.weighbridgeSource.length > 20);
+
+  const stationRes = await fetch(`${BASE}/api/station-data`);
+  check("station-data: HTTP 200", stationRes.status === 200, `status=${stationRes.status}`);
+  check("station-data: CORS open", stationRes.headers.get("access-control-allow-origin") === "*");
+  const sd = await stationRes.json();
+
+  check("station-data: has meta + stations", Boolean(sd.meta) && Boolean(sd.stations));
+  check("station-data: only completed weigh-ins counted", sd.meta?.statusKept === "完成", sd.meta?.statusKept);
+  check("station-data: reports 5 excluded weigh-ins",
+    sd.meta?.excluded?.notCompletedRecords === 5, JSON.stringify(sd.meta?.excluded?.notCompletedByStatus));
+  check("station-data: exclusion note present", typeof sd.meta?.excluded?.noteEn === "string" && sd.meta.excluded.noteEn.length > 20);
+
+  const wkts = sd.stations?.WKTS;
+  check("station-data: WKTS present", Boolean(wkts));
+  check("station-data: WKTS joins to rts-west-kowloon", wkts?.facilityId === "rts-west-kowloon", wkts?.facilityId);
+
+  // --- period ---
+  check("WKTS period is 1-15 Oct 2026",
+    wkts?.period?.from === "2026-10-01" && wkts?.period?.to === "2026-10-15",
+    JSON.stringify(wkts?.period));
+  check("WKTS has 15 operating days", wkts?.period?.operatingDays === 15, String(wkts?.period?.operatingDays));
+
+  // --- headline totals ---
+  check("WKTS totals 50,033.36 t", Math.abs((wkts?.totals?.tonnes ?? 0) - 50033.36) < 0.01, String(wkts?.totals?.tonnes));
+  check("WKTS totals 12,015 weigh-ins", wkts?.totals?.loads === 12015, String(wkts?.totals?.loads));
+  check("WKTS average 3,335.56 t/day", Math.abs((wkts?.totals?.tonnesPerDay ?? 0) - 3335.557) < 0.01, String(wkts?.totals?.tonnesPerDay));
+  check("WKTS maintenance reported separately (50.42 t / 66 loads)",
+    Math.abs((wkts?.totals?.maintenanceTonnes ?? 0) - 50.42) < 0.01 && wkts?.totals?.maintenanceLoads === 66,
+    `${wkts?.totals?.maintenanceTonnes} / ${wkts?.totals?.maintenanceLoads}`);
+
+  // --- every dimension must reconcile to the same intake total ---
+  const sum = (arr, key) => (arr ?? []).reduce((a, x) => a + (x[key] ?? 0), 0);
+  const near = (a, b) => Math.abs(a - b) < 0.02;
+  const total = wkts?.totals?.tonnes ?? 0;
+  check("WKTS daily sums to the total", near(sum(wkts?.daily, "tonnes"), total), String(sum(wkts?.daily, "tonnes")));
+  check("WKTS waste types sum to the total", near(sum(wkts?.wasteTypes, "tonnes"), total), String(sum(wkts?.wasteTypes, "tonnes")));
+  check("WKTS districts sum to the total", near(sum(wkts?.districts, "tonnes"), total), String(sum(wkts?.districts, "tonnes")));
+  check("WKTS streams sum to the total", near(sum(wkts?.streams, "tonnes"), total), String(sum(wkts?.streams, "tonnes")));
+  check("WKTS daily has 15 rows", wkts?.daily?.length === 15, String(wkts?.daily?.length));
+
+  // --- the delivery split, as the user specified it ---
+  const streams = Object.fromEntries((wkts?.streams ?? []).map((s) => [s.key, s]));
+  check("WKTS streams are private / public / gtw only",
+    JSON.stringify(Object.keys(streams).sort()) === JSON.stringify(["gtw", "private", "public"]),
+    JSON.stringify(Object.keys(streams)));
+  check("private = P99 (26,114.94 t)", near(streams.private?.tonnes, 26114.94), String(streams.private?.tonnes));
+  check("public = C31 + G01 (16,392.31 t)", near(streams.public?.tonnes, 16392.31), String(streams.public?.tonnes));
+  check("gtw = P97 (7,526.11 t)", near(streams.gtw?.tonnes, 7526.11), String(streams.gtw?.tonnes));
+  check("stream shares are fractions of intake, not of loads",
+    near(streams.private?.share, 0.522) && near(streams.public?.share, 0.328) && near(streams.gtw?.share, 0.15),
+    `${streams.private?.share} / ${streams.public?.share} / ${streams.gtw?.share}`);
+  check("maintenance is NOT one of the intake streams", streams.maintenance === undefined);
+
+  // --- GTW: WKTS is the only station that takes it ---
+  const gtwTypes = (wkts?.wasteTypes ?? []).filter((w) => w.gtw);
+  check("exactly one waste type is flagged GTW", gtwTypes.length === 1, String(gtwTypes.length));
+  check("GTW is S40.00 grease trap waste",
+    gtwTypes[0]?.code === "S40.00" && gtwTypes[0]?.loads === 848 && near(gtwTypes[0]?.tonnes, 7526.11),
+    JSON.stringify(gtwTypes[0]));
+  check("GTW is in the Special group", gtwTypes[0]?.group === "Special", gtwTypes[0]?.group);
+
+  // --- normalisation: the S42 typo/case duplicate must be one row ---
+  const s42 = (wkts?.wasteTypes ?? []).concat(wkts?.wasteTypesMaintenance ?? []).filter((w) => w.code === "S42.00");
+  check("S42.00 de-duplicated to a single row", s42.length === 1, `rows=${s42.length}`);
+  check("S42.00 was the maintenance vehicle only",
+    (wkts?.wasteTypes ?? []).every((w) => w.code !== "S42.00"),
+    JSON.stringify((wkts?.wasteTypes ?? []).map((w) => w.code)));
+
+  // --- districts ---
+  check("WKTS has 20 source districts", wkts?.districts?.length === 20, String(wkts?.districts?.length));
+  check("largest district is Kwai Tsing (8,793.35 t)",
+    wkts?.districts?.[0]?.code === "31" && near(wkts?.districts?.[0]?.tonnes, 8793.35),
+    JSON.stringify(wkts?.districts?.[0]));
+  check("districts carry an English label", wkts?.districts?.every((d) => typeof d.nameEn === "string" && d.nameEn.length > 1));
+
+  // --- no raw identifiers may reach the payload ---
+  const sdRaw = JSON.stringify(sd);
+  check("station-data: no account numbers", !sdRaw.includes("賬戶號碼"));
+  check("station-data: no licence plates", !sdRaw.includes("車牌"));
+  check("station-data: no permitted-weight field", !sdRaw.includes("許可重量"));
+  check("station-data: no station codes other than the covered ones",
+    JSON.stringify(sd.meta?.stations) === JSON.stringify(["WKTS"]), JSON.stringify(sd.meta?.stations));
+
+  // --- filters ---
+  const oneStation = await (await fetch(`${BASE}/api/station-data?station=WKTS`)).json();
+  check("?station=WKTS -> 1 station", Object.keys(oneStation.stations ?? {}).length === 1);
+  const byFacility = await (await fetch(`${BASE}/api/station-data?facility=rts-west-kowloon`)).json();
+  check("?facility=rts-west-kowloon -> WKTS", Boolean(byFacility.stations?.WKTS));
+  const noCoverage = await fetch(`${BASE}/api/station-data?facility=landfill-went`);
+  check("?facility without coverage -> 404", noCoverage.status === 404, String(noCoverage.status));
+  const unknownStation = await fetch(`${BASE}/api/station-data?station=ZZZZ`);
+  check("?station=unknown -> 404", unknownStation.status === 404, String(unknownStation.status));
+
+  // --- caching ---
+  const etag = stationRes.headers.get("etag");
+  check("station-data: ETag emitted", Boolean(etag), String(etag));
+  const revalidated = await fetch(`${BASE}/api/station-data`, { headers: { "if-none-match": etag } });
+  check("station-data: 304 on matching ETag", revalidated.status === 304, String(revalidated.status));
+
   // --- home page renders ---
   const home = await fetch(`${BASE}/`);
   const html = await home.text();

@@ -992,8 +992,10 @@ export const DATA_PROVENANCE = {
     "EPD 'Outlying Islands Transfer Facilities' — seven sites: Mui Wo, Cheung Chau, Peng Chau, Hei Ling Chau, Yung Shue Wan, Sok Kwu Wan, Ma Wan",
   facilityPageSource:
     "EPD 'Problems & Solutions' facility pages (Refuse Transfer Stations, Outlying Islands Transfer Facilities, Strategic Landfills) — source of the per-facility detail rows.",
+  weighbridgeSource:
+    "Station weighbridge exports supplied by the operator — per-weigh-in records, aggregated by scripts/ingest-weighbridge.mjs and served separately at /api/station-data. A different source from EPD: these are measured intake, not published rates. Completed (完成) weigh-ins only.",
   disclaimerEn:
-    "Facility location and published rates are from EPD. The OITF ~90 tpd value is the published seven-site system total, not a per-site rate. The history chart shows territory-wide annual data because EPD publishes no facility-level time series.",
+    "Facility location and published rates are from EPD. The OITF ~90 tpd value is the published seven-site system total, not a per-site rate. The history chart shows territory-wide annual data because EPD publishes no facility-level time series. Weighbridge figures are measured operator records, not EPD publications, and cover only the stations listed at /api/station-data.",
   disclaimerZh:
-    "設施位置及已公布處理量取自環保署。離島設施約每日90公噸為七站合計，並非各站數字。歷史圖表為全港年度數據；環保署並無公布個別設施的歷史序列。",
+    "設施位置及已公布處理量取自環保署。離島設施約每日90公噸為七站合計，並非各站數字。歷史圖表為全港年度數據；環保署並無公布個別設施的歷史序列。地磅數字為營運方實測記錄，並非環保署公布數據，只涵蓋 /api/station-data 所列的轉運站。",
 } as const;

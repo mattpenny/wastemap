@@ -64,6 +64,31 @@ Source URLs, the provenance record and the disclaimer are all in
 are surfaced in the UI — in the drawer and in the map "i" popover — rather than
 buried in code.
 
+### Measured intake, from the stations themselves
+
+There is a **second, separate source**. Where an operator supplies its station
+weighbridge export, the facility drawer gains a *Weighbridge records* block:
+total received tonnage, average tonnes/day, weigh-in count, a daily intake
+chart, and breakdowns by waste type, source district and who delivers it.
+
+It is kept deliberately apart from the EPD figures directly above it, because
+they are different kinds of number — a published rate versus measured intake.
+Only weigh-ins marked **完成 (completed)** are counted; cancelled and rejected
+weigh-ins are dropped, as are the station's own maintenance-vehicle loads
+(reported separately so nothing is hidden). The block states the measured value
+next to the EPD rate rather than letting the reader assume one is a cap on the
+other.
+
+Coverage today is **WKTS, 1–15 October 2026**: 12,015 weigh-ins, 50,033 t,
+3,336 t/day. WKTS is the only transfer station that takes **grease trap waste**
+(7,526 t over the period, 15.0% of its intake), and the UI says so.
+
+Raw exports live in `data/` and are **gitignored** — they carry account numbers
+and licence plates. `npm run ingest` reduces them to `src/data/weighbridge.json`
+(about 7 KB, aggregates only) and aborts if any account number or plate survives
+into the output. The same row format works for every RTS, so adding a station is
+a matter of dropping its export into `data/` and re-running the ingest.
+
 ## Features
 
 - 3D pillars via MapLibre GL + deck.gl, with a pitch/bearing view of Hong Kong.
@@ -77,7 +102,9 @@ buried in code.
   sites collapsed into one row that expands to its substations.
 - Facility detail drawer: headline throughput/capacity figures by default, with
   the full EPD record behind a **Detail** toggle. The map shrinks to make room
-  on desktop and becomes a bottom sheet on mobile.
+  on desktop and becomes a bottom sheet on mobile. Stations with weighbridge
+  coverage also get a measured-intake block — see
+  [Measured intake](#measured-intake-from-the-stations-themselves).
 
   ![A facility drawer with the EPD record expanded](docs/screenshot-drawer.jpg)
 
@@ -137,6 +164,21 @@ Invalid `category` returns `400`, unknown `id` returns `404`. The response
 `metadata` mirrors `DATA_PROVENANCE` in `src/data/waste-facilities.ts`; keep the
 two in step when changing fields.
 
+`GET /api/station-data` returns measured station intake from the operator
+weighbridge records — the same aggregates the drawer renders.
+
+| Parameter | Effect |
+| --- | --- |
+| *(none)* | Every station with weighbridge coverage |
+| `station=WKTS` | One station, by operator code |
+| `facility=rts-west-kowloon` | One station, by map facility id |
+| `pretty=1` | Pretty-print the JSON |
+
+Unknown stations, and facilities with no coverage, return `404`. This route is
+intentionally separate from `/api/waste-data`: one is the EPD facility register,
+the other is measured operator data, and merging them would invite exactly the
+conflation the project is built to avoid.
+
 ## Verification
 
 Two scripts under `scripts/` verify the app end to end — one against the API
@@ -145,8 +187,8 @@ exit non-zero on failure.
 
 ```bash
 npm run dev            # in one terminal
-node scripts/verify-api.mjs        # 68 payload assertions
-node scripts/verify-browser.mjs    # 79 in-browser assertions
+node scripts/verify-api.mjs        # 112 payload assertions
+node scripts/verify-browser.mjs    # 112 in-browser assertions
 ```
 
 `verify-browser.mjs` drives a real browser and writes screenshots to
@@ -160,7 +202,21 @@ viewport, that the title stays on one line (even with the type scaled up), and
 that nothing overflows horizontally. It also drives the two header disclosures:
 both start closed, the chevron reveals the counts and hides them again, the pill
 opens the toolbar *inside* the header card, A+ / A− still work from there, and
-the desktop copy of the toolbar stays hidden. It uses
+the desktop copy of the toolbar stays hidden.
+
+`verify-api.mjs` also covers `/api/station-data`: that only 完成 weigh-ins are
+counted, that the daily / waste-type / district / stream breakdowns all
+reconcile to the same intake total, that maintenance tonnage is reported
+separately and is not one of the intake streams, that the `S42.00` typo and
+case duplicates collapse to one row, and that no account number, plate or
+permitted-weight field reaches the payload.
+
+`verify-browser.mjs` drives the WKTS drawer too, and asserts the bar *geometry*
+rather than just the text — an earlier build passed `Array.map`'s index as the
+share, so the bars read 0%, 100%, 200%… and every one past the first was clipped
+to full width, which looked entirely plausible on screen.
+
+It uses
 Playwright, which is intentionally **not** a dependency
 of this project; `scripts/_playwright.mjs` loads it in this order:
 
@@ -175,23 +231,38 @@ viewport coordinates; it is not part of the test suite. `_probe-mobile.mjs`
 audits the layout at three phone widths and reports the title's line count, any
 element overflowing the viewport, and whether each dock sheet stays on screen.
 `_shot-mobile.mjs` screenshots the opening view, both header disclosures, and
-each dock sheet at three phone widths.
+each dock sheet at three phone widths. `_shot-weighbridge.mjs` screenshots the
+WKTS drawer on desktop and at 390px, top and bottom.
 
 ## Project layout
 
 ```
 src/app/               App Router pages, layout, globals.css
-src/app/api/waste-data Data proxy returning GeoJSON
+src/app/api/waste-data Data proxy returning GeoJSON (EPD facility register)
+src/app/api/station-data  Measured station intake (operator weighbridge records)
 src/components/map/    MapLibre + deck.gl map, basemap style definitions
-src/components/ui/     Drawer, trend panel, legend chrome, info popover
-src/data/              Facility dataset, provenance, HK-wide annual trend
-src/lib/               Category metadata, i18n, formatting helpers
-scripts/               Verification scripts and shared Playwright loader
+src/components/ui/     Drawer, weighbridge block, trend panel, legend chrome
+src/data/              Facility dataset, provenance, HK-wide trend, weighbridge aggregate
+src/lib/               Category metadata, i18n, weighbridge types, formatting helpers
+scripts/               Ingest + verification scripts and shared Playwright loader
+data/                  Raw weighbridge exports (gitignored — see the data section)
 docs/                  Screenshots used by this README
 ```
 
 `src/app/page.tsx` is the single source of UI state; the map and the drawer are
 presentational.
+
+### Regenerating the weighbridge aggregate
+
+```bash
+# drop the operator's export(s) into data/, then:
+npm run ingest
+```
+
+The script keeps 完成 weigh-ins, normalises the waste-type codes, separates the
+station's own maintenance loads, and writes `src/data/weighbridge.json`. It
+refuses to write if any account number or licence plate from the input appears
+in the output. The same row format works for every RTS.
 
 ## Tech
 

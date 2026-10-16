@@ -247,7 +247,126 @@ if (await oitf.count()) {
 }
 
 // =====================================================================
-// 9. Mobile layout — bottom dock, one sheet at a time, one-line title
+// 9. WKTS weighbridge records — the measured-intake block
+// =====================================================================
+// A different source from the EPD tiles above it: real per-weigh-in records
+// from the station's own weighbridge. Only WKTS reports any, so this section
+// also proves the block stays absent for every other station (see the IETS
+// drawer checks in section 4, which assert no chart appears there).
+{
+  const wkts = page.locator("button", { hasText: "West Kowloon Transfer Station" }).first();
+  check("WKTS row present in ranking", (await wkts.count()) === 1);
+  await wkts.click();
+  await page.waitForTimeout(2000);
+
+  const drawer = page.locator('aside[role="dialog"]');
+  const section = drawer.locator('[data-testid="weighbridge-section"]');
+  check("WKTS drawer shows the weighbridge block", (await section.count()) === 1);
+
+  const wbText = await section.innerText();
+  check("weighbridge: total received 50,033 t", wbText.includes("50,033"), wbText.slice(0, 120));
+  check("weighbridge: average 3,336 t/day", /3,33[56]/.test(wbText));
+  check("weighbridge: 12,015 weigh-ins", wbText.includes("12,015"));
+  check("weighbridge: 15 operating days", /\b15\b/.test(wbText));
+  check("weighbridge: labelled as measured, not published", /MEASURED INTAKE/i.test(wbText));
+  check("weighbridge: states the source is operator records, not EPD",
+    /not an EPD publication/i.test(wbText));
+
+  // GTW — the waste type only WKTS takes.
+  check("weighbridge: GTW appears as a waste type", /grease trap waste/i.test(wbText));
+  check("weighbridge: says WKTS is the only station taking GTW",
+    /only transfer station/i.test(wbText));
+  check("weighbridge: GTW tonnage 7,526 t", wbText.includes("7,526"));
+
+  // Private vs public, as specified.
+  check("weighbridge: private vehicles row", /Private vehicles/i.test(wbText));
+  check("weighbridge: FEHD / public row", /FEHD \/ public/i.test(wbText));
+  check("weighbridge: private is 52.2%", wbText.includes("52.2%"), "");
+  check("weighbridge: public is 32.8%", wbText.includes("32.8%"));
+  check("weighbridge: GTW is 15.0%", wbText.includes("15.0%"));
+
+  check("weighbridge: source district section", /SOURCE DISTRICT/i.test(wbText));
+  check("weighbridge: lists Kwai Tsing", /Kwai Tsing/i.test(wbText));
+  check("weighbridge: waste type section", /WASTE TYPE/i.test(wbText));
+
+  // Measured vs published must be reconciled, not left as two bare numbers.
+  check("weighbridge: reconciles measured intake with the EPD published rate",
+    /against an EPD published rate of 2,700/i.test(wbText) && /\+23\.5%/.test(wbText));
+
+  check("weighbridge: exactly one chart in the drawer",
+    (await drawer.locator(".recharts-wrapper").count()) === 1);
+
+  // --- bar geometry ---
+  // These bars are sized from each row's share of intake. An earlier build
+  // passed Array.map's index as the share, so the bars read 0%, 100%, 200%…
+  // and every one past the first was clipped to full width — which looked
+  // plausible on screen. Assert the geometry, not just the text.
+  const readList = (id) =>
+    page.evaluate((sel) => {
+      const root = document.querySelector(sel);
+      if (!root) return null;
+      return [...root.querySelectorAll("div.space-y-1")].map((row) => {
+        const label = row.querySelector("span")?.innerText?.trim() ?? "";
+        const pctText = row.querySelector("span.w-24")?.innerText?.replace(/\s+/g, " ").trim() ?? "";
+        const bar = row.querySelector('div[style*="width"]');
+        return { label, pctText, width: Number.parseFloat(bar?.style?.width ?? "0") };
+      });
+    }, `[data-testid="${id}"]`);
+
+  const wbStreams = await readList("wb-streams");
+  const wbWaste = await readList("wb-waste-types");
+  const wbDistricts = await readList("wb-districts");
+
+  const allBars = [...(wbStreams ?? []), ...(wbWaste ?? []), ...(wbDistricts ?? [])];
+  check("weighbridge: bars are proportional, not index-sized",
+    allBars.length > 0 && allBars.every((b) => b.width > 0 && b.width <= 100),
+    JSON.stringify(allBars.map((b) => b.width)));
+  check("weighbridge: every bar matches its printed share",
+    allBars.every((b) => {
+      const printed = Number.parseFloat(b.pctText);
+      return Number.isFinite(printed) && Math.abs(printed - b.width) < 0.15;
+    }),
+    JSON.stringify(allBars.map((b) => `${b.width}/${b.pctText}`)));
+
+  check("weighbridge: stream bars are 52.2 / 32.8 / 15.0",
+    wbStreams?.length === 3 &&
+      Math.abs(wbStreams[0].width - 52.2) < 0.2 &&
+      Math.abs(wbStreams[1].width - 32.8) < 0.2 &&
+      Math.abs(wbStreams[2].width - 15.0) < 0.2,
+    JSON.stringify(wbStreams?.map((b) => b.width)));
+
+  check("weighbridge: waste type list starts at 38.5% and descends",
+    wbWaste?.[0] && Math.abs(wbWaste[0].width - 38.5) < 0.2 &&
+      wbWaste.every((b, i) => i === 0 || b.width <= wbWaste[i - 1].width),
+    JSON.stringify(wbWaste?.map((b) => b.width)));
+
+  const gtwRow = wbWaste?.find((b) => /grease trap waste \(GTW\)/i.test(b.label));
+  check("weighbridge: GTW row is 15% of intake", gtwRow && Math.abs(gtwRow.width - 15) < 0.2,
+    JSON.stringify(gtwRow));
+
+  check("weighbridge: district list starts at 17.6% and descends",
+    wbDistricts?.[0] && Math.abs(wbDistricts[0].width - 17.6) < 0.2 &&
+      wbDistricts.every((b, i) => i === 0 || b.width <= wbDistricts[i - 1].width),
+    JSON.stringify(wbDistricts?.map((b) => b.width)));
+
+  // --- ranked lists expand ---
+  const moreButtons = section.locator('[data-testid="ranked-more"]');
+  check("weighbridge: both ranked lists offer an expander",
+    (await moreButtons.count()) === 2, `buttons=${await moreButtons.count()}`);
+  await moreButtons.first().click();
+  await page.waitForTimeout(600);
+  const expandedWaste = await readList("wb-waste-types");
+  check("weighbridge: +N reveals the remaining rows",
+    (expandedWaste?.length ?? 0) > (wbWaste?.length ?? 0),
+    `${wbWaste?.length} -> ${expandedWaste?.length}`);
+
+  await page.screenshot({ path: path.join(OUT_DIR, "wkts-weighbridge.png") });
+  await page.locator('button[aria-label="Close" i]').first().click().catch(() => {});
+  await page.waitForTimeout(600);
+}
+
+// =====================================================================
+// 10. Mobile layout — bottom dock, one sheet at a time, one-line title
 // =====================================================================
 // History, in order: (a) the ranking card and the trend panel were `hidden`
 // below lg, so on a phone they — and the ranking card's quick filters — did not
@@ -485,11 +604,44 @@ if (await oitf.count()) {
   await mobile.waitForTimeout(700);
   check("mobile: tapping the active tab closes its sheet", !(await sheetShown("trend-sheet")));
 
+  // The weighbridge block has to survive the phone drawer too — it is the
+  // densest thing in the app, and the mobile drawer is a bottom sheet rather
+  // than the desktop side panel.
+  await tab("list").click();
+  await mobile.waitForTimeout(1000);
+  await mobile.locator("button", { hasText: "West Kowloon Transfer Station" }).first().click();
+  await mobile.waitForTimeout(2500);
+  const mobileWb = await mobile.evaluate(() => {
+    const sec = document.querySelector('[data-testid="weighbridge-section"]');
+    const drawer = document.querySelector('aside[role="dialog"]');
+    const text = drawer?.innerText ?? "";
+    const bars = [...(sec?.querySelectorAll("div.space-y-1") ?? [])].map((row) =>
+      Number.parseFloat(row.querySelector('div[style*="width"]')?.style?.width ?? "0")
+    );
+    return {
+      shown: Boolean(sec),
+      width: sec ? Math.round(sec.getBoundingClientRect().width) : 0,
+      hasTotal: /50,033/.test(text),
+      hasGtw: /grease trap waste/i.test(text),
+      charts: drawer?.querySelectorAll(".recharts-wrapper").length ?? 0,
+      barsInRange: bars.length > 0 && bars.every((w) => w > 0 && w <= 100),
+      scrollW: document.documentElement.scrollWidth,
+      vw: innerWidth,
+    };
+  });
+  check("mobile: WKTS drawer shows the weighbridge block", mobileWb.shown, JSON.stringify(mobileWb));
+  check("mobile: weighbridge figures render in the bottom sheet",
+    mobileWb.hasTotal && mobileWb.hasGtw && mobileWb.charts === 1, JSON.stringify(mobileWb));
+  check("mobile: weighbridge bars stay proportional", mobileWb.barsInRange);
+  check("mobile: weighbridge drawer causes no horizontal overflow",
+    mobileWb.scrollW <= mobileWb.vw, `${mobileWb.scrollW}/${mobileWb.vw}`);
+  await mobile.screenshot({ path: path.join(OUT_DIR, "mobile-390-wkts-weighbridge.png") });
+
   await mobile.close();
 }
 
 // =====================================================================
-// 10. No runtime errors
+// 11. No runtime errors
 // =====================================================================
 const realErrors = errors.filter(
   (e) => !/favicon|Download the React DevTools|WebGL|SwiftShader|GPU stall/i.test(e)
