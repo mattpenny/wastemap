@@ -21,6 +21,14 @@
  *   4. Group by station, then by day, waste type, source district and vehicle
  *      task.
  *
+ * The waste-type and district breakdowns are emitted **per day as well as for
+ * the period** (`daily[].wasteTypes` / `daily[].districts`). That is what lets
+ * the app re-slice the card by an arbitrary date range: without it the only
+ * date-filterable numbers would be the headline totals and the stream split,
+ * and the two ranked lists would have to stay pinned to the whole period. The
+ * per-day rows carry codes only — names and the GTW flag live once on the
+ * station, and the app joins them back on.
+ *
  * Run:  npm run ingest
  */
 import fs from "node:fs";
@@ -291,12 +299,37 @@ for (const row of rows) {
   station.gtwByTask += stream === "gtw" ? 1 : 0;
   station.gtwByCode += GTW_CODES.has(wasteCode) ? 1 : 0;
 
-  const day = station.days.get(iso) ?? { tonnes: 0, loads: 0, private: 0, public: 0, gtw: 0 };
+  const day = station.days.get(iso) ?? {
+    tonnes: 0,
+    loads: 0,
+    private: 0,
+    public: 0,
+    gtw: 0,
+    privateLoads: 0,
+    publicLoads: 0,
+    gtwLoads: 0,
+    wasteTypes: new Map(),
+    districts: new Map(),
+  };
   day.tonnes += weight;
   day.loads += 1;
-  if (stream === "gtw") day.gtw += weight;
-  else if (stream === "public") day.public += weight;
-  else if (stream === "private") day.private += weight;
+  // Per-stream tonnage *and* per-stream loads: the app re-slices both, and
+  // splitting loads by tonnage to recover them later would be inventing a
+  // number rather than counting one.
+  if (stream === "gtw") {
+    day.gtw += weight;
+    day.gtwLoads += 1;
+  } else if (stream === "public") {
+    day.public += weight;
+    day.publicLoads += 1;
+  } else if (stream === "private") {
+    day.private += weight;
+    day.privateLoads += 1;
+  }
+  // The per-day splits the date picker re-slices. Same rows, same rules as the
+  // period aggregates — these are not a second source.
+  bump(day.wasteTypes, wasteCode, weight);
+  bump(day.districts, district.code, weight);
   station.days.set(iso, day);
 
   bump(station.streams, stream, weight);
@@ -362,6 +395,14 @@ for (const [stationId, s] of [...stations].sort(([a], [b]) => a.localeCompare(b)
     },
     daily: dayKeys.map((d) => {
       const day = s.days.get(d);
+      const split = (map) =>
+        [...map.entries()]
+          .map(([code, v]) => ({
+            code,
+            tonnes: round(v.tonnes),
+            loads: v.loads,
+          }))
+          .sort((a, b) => b.tonnes - a.tonnes);
       return {
         date: d,
         tonnes: round(day.tonnes),
@@ -369,6 +410,11 @@ for (const [stationId, s] of [...stations].sort(([a], [b]) => a.localeCompare(b)
         private: round(day.private),
         public: round(day.public),
         gtw: round(day.gtw),
+        privateLoads: day.privateLoads,
+        publicLoads: day.publicLoads,
+        gtwLoads: day.gtwLoads,
+        wasteTypes: split(day.wasteTypes),
+        districts: split(day.districts),
       };
     }),
     streams: [...s.streams.entries()]
@@ -435,6 +481,54 @@ if (warnings.length > 0) {
   console.log("\nWarnings:");
   for (const w of warnings) console.log(`  ! ${w}`);
 }
+
+// ---------------------------------------------------------------------------
+// Reconciliation: every per-day breakdown must add back up to the period
+// aggregate it was cut from. If these ever disagree the app would show a
+// date-filtered figure that no longer matches the full-period one, which is
+// exactly the kind of quiet inconsistency this project is built to avoid.
+// ---------------------------------------------------------------------------
+const reconcileErrors = [];
+for (const st of Object.values(out.stations)) {
+  const sums = {
+    "daily tonnage": st.daily.reduce((a, d) => a + d.tonnes, 0),
+    "daily loads": st.daily.reduce((a, d) => a + d.loads, 0),
+    "daily waste types": st.daily.reduce(
+      (a, d) => a + d.wasteTypes.reduce((x, w) => x + w.tonnes, 0),
+      0
+    ),
+    "daily districts": st.daily.reduce(
+      (a, d) => a + d.districts.reduce((x, v) => x + v.tonnes, 0),
+      0
+    ),
+  };
+  const expected = st.totals.tonnes;
+  for (const [label, value] of Object.entries(sums)) {
+    const want = label === "daily loads" ? st.totals.loads : expected;
+    if (Math.abs(value - want) > 0.02) {
+      reconcileErrors.push(
+        `${st.stationId}: ${label} sum to ${value.toFixed(3)}, but the period total is ${want}`
+      );
+    }
+  }
+
+  // Per-stream loads, which the app re-slices but does not recompute.
+  for (const stream of st.streams) {
+    const key = `${stream.key}Loads`;
+    const daily = st.daily.reduce((a, d) => a + (d[key] ?? 0), 0);
+    if (daily !== stream.loads) {
+      reconcileErrors.push(
+        `${st.stationId}: daily ${stream.key} loads sum to ${daily}, but the period stream has ${stream.loads}`
+      );
+    }
+  }
+}
+if (reconcileErrors.length > 0) {
+  console.error("\nABORT: per-day breakdowns do not reconcile with the period totals:");
+  for (const e of reconcileErrors) console.error(`  ! ${e}`);
+  process.exit(1);
+}
+console.log("\nReconciled: per-day breakdowns sum to the period totals for every station.");
 
 // ---------------------------------------------------------------------------
 // Safety: the aggregate must not carry any account number or licence plate.

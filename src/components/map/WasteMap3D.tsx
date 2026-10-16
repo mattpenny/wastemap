@@ -415,11 +415,22 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
   }, []);
 
   // ------------------------------------------------------------------
-  // Frame the facility extent once the data has arrived. The padding
-  // reserves room for the header/legend on the left and the ranking panel
-  // on the right, so no facility hides behind the overlay chrome.
+  // Frame the facility extent once the data has arrived.
+  //
+  // The padding used to reserve the full width of the header card on the left
+  // and the ranking card on the right (390 + 340 = 730px). That was wrong for
+  // the *opening* view: every panel starts collapsed, so on a 1080px window it
+  // was reserving 68% of the map for two small pills and the territory ended
+  // up as a small cluster in the middle of a lot of open sea. What actually
+  // overlaps the map at rest is a top strip (the header card) and thin bottom
+  // strips (the legend / trend pills), so that is what the padding covers now.
+  // Opening a panel afterwards can put a site behind it; the user opened it,
+  // and panning is one drag away.
   // ------------------------------------------------------------------
   const framedRef = useRef(false);
+  /** The camera the opening view settled on, so "Reset view" returns to it. */
+  const framedCameraRef = useRef<{ center: [number, number]; zoom: number } | null>(null);
+
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !ready || framedRef.current || facilities.length === 0) return;
@@ -427,16 +438,70 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
     const bounds = new maplibregl.LngLatBounds();
     for (const facility of facilities) bounds.extend(facility.coordinates);
 
+    const padding = isSmallScreen()
+      ? { top: 110, bottom: 120, left: 24, right: 24 }
+      : { top: 150, bottom: 70, left: 60, right: 60 };
+    const pitch = isSmallScreen() ? 40 : HK_PITCH;
+
+    // 1. Fit the *width* of the extent. A box that is a hair tall makes the
+    //    fit ignore latitude and solve for the east-west spread alone, which
+    //    is what should set the zoom: the territory is wider than it is tall,
+    //    so a latitude-driven fit on a short window leaves a lot of empty sea
+    //    either side.
+    //
+    //    Flat, because MapLibre's pitch-aware fit errs heavily on the wide
+    //    side — at pitch 50 it came out about 2.7x wider than the extent
+    //    needed, which is what left the territory as a small cluster in the
+    //    middle of the sea.
+    const midLat = (bounds.getSouth() + bounds.getNorth()) / 2;
+    const widthOnly = new maplibregl.LngLatBounds(
+      [bounds.getWest(), midLat - 0.002],
+      [bounds.getEast(), midLat + 0.002]
+    );
+    const byWidth = map.cameraForBounds(widthOnly, { padding, bearing: HK_BEARING, pitch: 0 });
+    // `zoom` is optional on the returned camera, so narrow it rather than
+    // asserting — a missing zoom means no usable fit at all.
+    if (!byWidth || typeof byWidth.zoom !== "number") return;
+
     framedRef.current = true;
-    map.fitBounds(bounds, {
-      padding: isSmallScreen()
-        ? { top: 200, bottom: 240, left: 40, right: 40 }
-        : { top: 150, bottom: 120, left: 390, right: 340 },
-      maxZoom: 12,
-      pitch: isSmallScreen() ? 40 : HK_PITCH,
+    // jumpTo is instant by definition — no duration to pass.
+    map.jumpTo({
+      center: byWidth.center as [number, number],
+      zoom: byWidth.zoom,
       bearing: HK_BEARING,
-      duration: 0,
+      pitch,
     });
+
+    // 2. Relax until every corner is actually on the canvas. Testing real
+    //    projected corners rather than a formula keeps this honest at any
+    //    window size and aspect ratio. The guard is the canvas edge rather
+    //    than the padded band, so a short window trades a little of the
+    //    north/south extreme for a frame full of Hong Kong instead of
+    //    half-full of open sea.
+    const canvas = map.getCanvas();
+    if (canvas.clientWidth === 0) return;
+
+    const corners = [
+      bounds.getNorthWest(),
+      bounds.getNorthEast(),
+      bounds.getSouthWest(),
+      bounds.getSouthEast(),
+    ];
+    const onCanvas = () =>
+      corners.every((corner) => {
+        const p = map.project(corner);
+        return p.x >= 0 && p.x <= canvas.clientWidth && p.y >= 0 && p.y <= canvas.clientHeight;
+      });
+
+    let zoom = byWidth.zoom;
+    for (let i = 0; i < 24; i += 1) {
+      map.setZoom(zoom);
+      if (onCanvas()) break;
+      zoom -= 0.25;
+    }
+    map.setZoom(zoom);
+
+    framedCameraRef.current = { center: byWidth.center as [number, number], zoom };
   }, [ready, facilities]);
 
   // ------------------------------------------------------------------
@@ -474,9 +539,13 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
     ref,
     () => ({
       resetView: () => {
+        // Back to the framing the app opened on — the same extent-filled view
+        // the tighten pass settled on, not a fixed zoom that no longer matches
+        // it. Falls back to the territory centre if the fit never ran.
+        const framed = framedCameraRef.current;
         mapRef.current?.flyTo({
-          center: HK_CENTER,
-          zoom: isSmallScreen() ? 9.6 : HK_ZOOM,
+          center: framed?.center ?? HK_CENTER,
+          zoom: framed?.zoom ?? (isSmallScreen() ? 9.6 : HK_ZOOM),
           pitch: isSmallScreen() ? 40 : HK_PITCH,
           bearing: HK_BEARING,
           duration: 1400,

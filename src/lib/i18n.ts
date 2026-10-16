@@ -144,9 +144,6 @@ const DICT = {
   weighbridgeTitle: ["Weighbridge records", "地磅記錄"],
   weighbridgeSubtitle: ["Measured intake", "實測接收量"],
   weighbridgePeriod: ["Period", "期間"],
-  weighbridgeDays: ["Operating days", "運作日數"],
-  weighbridgeLoads: ["Weigh-ins", "過磅次數"],
-  weighbridgeLoadsPerDay: ["Weigh-ins per day", "每日過磅次數"],
 
   // The Per day / Total switch rescales every figure in the block, so the tile
   // labels change with it rather than reading "total" next to an average.
@@ -157,13 +154,27 @@ const DICT = {
   wbMswPerDay: ["MSW per day", "每日都市固體廢物"],
   wbGtwPerDay: ["GTW per day", "每日隔油池廢物"],
 
-  // The daily chart is the one thing the Per day / Total switch leaves alone:
-  // it is a day-by-day series, not a total or an average.
-  weighbridgeDaily: ["Daily waste intake", "每日廢物接收量"],
-  wbChartDailyCaption: [
-    "Tonnes per day, by delivery stream.",
-    "每日接收量，按來源類別劃分。",
-  ],
+  // Date window. Every figure in the block is re-derived from it, so the
+  // available range is stated rather than left for the reader to discover by
+  // finding that the picker will not go back any further.
+  wbFrom: ["From", "由"],
+  wbTo: ["To", "至"],
+  wbFullPeriod: ["Full period", "全期"],
+  wbAvailable: ["Data available", "可用數據"],
+  wbDaysShort: ["days", "日"],
+
+  // The intake chart: one line per delivery stream, bucketed by period.
+  weighbridgeDaily: ["Waste intake", "廢物接收量"],
+  wbGranularity: ["Chart period", "圖表期間"],
+  wbBucketDay: ["Day", "日"],
+  wbBucketMonth: ["Month", "月"],
+  wbBucketQuarter: ["Qtr", "季"],
+  wbBucketYear: ["Year", "年"],
+  wbNoData: ["No weigh-ins in this period.", "此期間沒有過磅記錄。"],
+  wbCaptionDay: ["Tonnes per day, by delivery stream.", "每日接收量，按來源類別劃分。"],
+  wbCaptionMonth: ["Tonnes per month, by delivery stream.", "每月接收量，按來源類別劃分。"],
+  wbCaptionQuarter: ["Tonnes per quarter, by delivery stream.", "每季接收量，按來源類別劃分。"],
+  wbCaptionYear: ["Tonnes per year, by delivery stream.", "每年接收量，按來源類別劃分。"],
   weighbridgeStreams: ["Who delivers it", "來源類別"],
   weighbridgeWasteTypes: ["Waste type", "廢物類別"],
   weighbridgeDistricts: ["Source district", "來源地區"],

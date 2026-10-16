@@ -292,13 +292,41 @@ if (await oitf.count()) {
   const section = drawer.locator('[data-testid="weighbridge-section"]');
   check("WKTS drawer shows the weighbridge block", (await section.count()) === 1);
 
+  /**
+   * Read a ranked list's rendered rows: label, printed tonnage, printed share
+   * and the bar's actual width in percent.
+   */
+  const readList = (id) =>
+    page.evaluate((sel) => {
+      const root = document.querySelector(sel);
+      if (!root) return null;
+      return [...root.querySelectorAll("div.space-y-1")].map((row) => {
+        const label = row.querySelector("span")?.innerText?.trim() ?? "";
+        const value = row.querySelector("span.font-semibold.tabular-nums")?.innerText ?? "";
+        const pctText = row.querySelector("span.w-28")?.innerText?.replace(/\s+/g, " ").trim() ?? "";
+        const bar = row.querySelector('div[style*="width"]');
+        return {
+          label,
+          value: Number.parseFloat(value.replace(/,/g, "")),
+          pctText,
+          width: Number.parseFloat(bar?.style?.width ?? "0"),
+          color: bar?.style?.backgroundColor ?? "",
+        };
+      });
+    }, `[data-testid="${id}"]`);
+
   const wbText = await section.innerText();
   // The intake is split MSW / GTW, so the two tiles sum to the period total
-  // (42,507 + 7,526 = 50,033) rather than showing it as one figure.
+  // (42,507 + 7,526 = 50,033) rather than showing it as one figure, and each
+  // tile carries its own load count (11,167 + 848 = 12,015 weigh-ins).
   check("weighbridge: total received MSW 42,507 t", wbText.includes("42,507"), wbText.slice(0, 160));
+  check("weighbridge: MSW tile carries its load count", wbText.includes("11,167"));
   check("weighbridge: total received GTW 7,526 t", wbText.includes("7,526"));
-  check("weighbridge: 12,015 weigh-ins", wbText.includes("12,015"));
-  check("weighbridge: 15 operating days", /\b15\b/.test(wbText));
+  check("weighbridge: GTW tile carries its load count", wbText.includes("848"));
+  // The Weigh-ins and Operating days tiles were removed on request; the two
+  // load counts above now carry that information.
+  check("weighbridge: Weigh-ins tile removed", !/WEIGH-INS/i.test(wbText));
+  check("weighbridge: Operating days tile removed", !/OPERATING DAYS/i.test(wbText));
   check("weighbridge: labelled as measured, not published", /MEASURED INTAKE/i.test(wbText));
   // Both were removed on request: the card no longer sets a measured intake
   // against the EPD published rate, nor shows the station's maintenance loads.
@@ -340,36 +368,103 @@ if (await oitf.count()) {
   });
   check("weighbridge: intake chart is a 3-line chart",
     chartKind.lines === 3 && chartKind.bars === 0, JSON.stringify(chartKind));
-  check("weighbridge: intake chart is the daily series",
+  check("weighbridge: intake chart opens on the daily series",
     chartKind.ticks[0] === "01/10" && chartKind.ticks.includes("15/10"),
     JSON.stringify(chartKind.ticks));
   check("weighbridge: exactly one chart in the drawer",
     (await drawer.locator(".recharts-wrapper").count()) === 1);
+
+  // --- the date window ---
+  // Every figure in the block is derived from one summarise call over this
+  // window, so a filter that moved the tiles but not the lists (or the chart)
+  // would be the bug to catch here.
+  check("weighbridge: period picker present",
+    (await section.locator('[data-testid="wb-period"]').count()) === 1);
+  const fromInput = section.locator('[data-testid="wb-from"]');
+  const toInput = section.locator('[data-testid="wb-to"]');
+  check("weighbridge: opens on the full period",
+    (await fromInput.inputValue()) === "2026-10-01" && (await toInput.inputValue()) === "2026-10-15",
+    `${await fromInput.inputValue()} → ${await toInput.inputValue()}`);
+  check("weighbridge: states the available range",
+    /Data available: 01\/10\/2026 – 15\/10\/2026/.test(wbText));
+  // The picker cannot reach outside the data: a user should not be able to
+  // select a period the station has no records for.
+  check("weighbridge: picker is clamped to the data",
+    (await fromInput.getAttribute("min")) === "2026-10-01" &&
+      (await toInput.getAttribute("max")) === "2026-10-15");
+
+  await fromInput.fill("2026-10-05");
+  await page.waitForTimeout(300);
+  await toInput.fill("2026-10-09");
+  await page.waitForTimeout(700);
+  const windowText = await section.innerText();
+  // 5–9 Oct only: MSW 14,504 t / 3,851 loads, GTW 2,825 t / 309 loads.
+  check("weighbridge: window re-slices the tiles",
+    windowText.includes("14,504") && windowText.includes("3,851") &&
+      windowText.includes("2,825") && windowText.includes("309"),
+    windowText.slice(0, 200));
+  check("weighbridge: window reports its own day count", /5 days/.test(windowText));
+  const windowTicks = await section.evaluate((el) =>
+    [...el.querySelectorAll(".recharts-xAxis .recharts-cartesian-axis-tick-value")].map(
+      (t) => t.textContent
+    )
+  );
+  check("weighbridge: window re-slices the chart",
+    windowTicks[0] === "05/10" && windowTicks[windowTicks.length - 1] === "09/10",
+    JSON.stringify(windowTicks));
+  // The ranked lists are re-sliced too — this is what the per-day breakdowns
+  // in the ingest exist for. Kwai Tsing leads the full period; inside a single
+  // week a different district should be able to take the top spot.
+  const windowDistricts = await readList("wb-districts");
+  check("weighbridge: window re-slices the district list",
+    (windowDistricts?.[0]?.value ?? 0) > 0 && (windowDistricts?.[0]?.value ?? 0) < 8793,
+    JSON.stringify(windowDistricts?.[0]));
+  check("weighbridge: re-sliced shares are still of the window",
+    windowDistricts?.every((b) => b.width > 0 && b.width <= 100));
+
+  await section.locator('[data-testid="wb-full-period"]').click();
+  await page.waitForTimeout(700);
+  check("weighbridge: Full period restores the whole range",
+    (await fromInput.inputValue()) === "2026-10-01" &&
+      (await section.innerText()).includes("42,507"));
+
+  // --- the chart period switch ---
+  const bucketTicks = async (b) => {
+    await section.locator(`[data-testid="wb-bucket-${b}"]`).click();
+    await page.waitForTimeout(500);
+    return section.evaluate((el) =>
+      [...el.querySelectorAll(".recharts-xAxis .recharts-cartesian-axis-tick-value")].map(
+        (t) => t.textContent
+      )
+    );
+  };
+  check("weighbridge: chart period switch present",
+    (await section.locator('[data-testid="wb-bucket"]').count()) === 1);
+  // Only October 2026 exists, so the coarser buckets hold a single partial
+  // period each. That is the data, not a bug — the app says so rather than
+  // inventing months it does not have.
+  check("weighbridge: Month bucket labels the month",
+    JSON.stringify(await bucketTicks("month")) === '["Oct 26"]');
+  check("weighbridge: Quarter bucket labels the quarter",
+    JSON.stringify(await bucketTicks("quarter")) === '["Q4 26"]');
+  check("weighbridge: Year bucket labels the year",
+    JSON.stringify(await bucketTicks("year")) === '["2026"]');
+  check("weighbridge: chart period does not move the tiles",
+    (await section.innerText()).includes("42,507"));
+  await bucketTicks("day");
+
+  // --- the year selector ---
+  const yearSelect = section.locator('[data-testid="wb-year"]');
+  check("weighbridge: year selector present", (await yearSelect.count()) === 1);
+  check("weighbridge: year selector lists the years in the data",
+    JSON.stringify(await yearSelect.locator("option").allInnerTexts()) === '["2026"]',
+    JSON.stringify(await yearSelect.locator("option").allInnerTexts()));
 
   // --- bar geometry ---
   // Bars are sized from each row's share of its list's denominator. An earlier
   // build passed Array.map's index as the share, so the bars read 0%, 100%,
   // 200%… and every one past the first was clipped to full width — which looked
   // plausible on screen. Assert the geometry, not just the text.
-  const readList = (id) =>
-    page.evaluate((sel) => {
-      const root = document.querySelector(sel);
-      if (!root) return null;
-      return [...root.querySelectorAll("div.space-y-1")].map((row) => {
-        const label = row.querySelector("span")?.innerText?.trim() ?? "";
-        const value = row.querySelector("span.font-semibold.tabular-nums")?.innerText ?? "";
-        const pctText = row.querySelector("span.w-28")?.innerText?.replace(/\s+/g, " ").trim() ?? "";
-        const bar = row.querySelector('div[style*="width"]');
-        return {
-          label,
-          value: Number.parseFloat(value.replace(/,/g, "")),
-          pctText,
-          width: Number.parseFloat(bar?.style?.width ?? "0"),
-          color: bar?.style?.backgroundColor ?? "",
-        };
-      });
-    }, `[data-testid="${id}"]`);
-
   const wbStreams = await readList("wb-streams");
   const wbWaste = await readList("wb-waste-types");
   const wbDistricts = await readList("wb-districts");
@@ -431,14 +526,22 @@ if (await oitf.count()) {
   const perDayText = await section.innerText();
   check("weighbridge: Per day relabels the tiles",
     /MSW PER DAY/i.test(perDayText) && /GTW PER DAY/i.test(perDayText));
-  // 42,507.25 / 15 and 7,526.11 / 15.
+  // 42,507.25 / 15, 7,526.11 / 15 and the same for their load counts.
   check("weighbridge: Per day rescales the tiles",
-    perDayText.includes("2,834") && perDayText.includes("502") && perDayText.includes("801"),
+    perDayText.includes("2,834") && perDayText.includes("502") &&
+      perDayText.includes("744") && perDayText.includes("57"),
     perDayText.slice(0, 160));
   // The chart stays the daily series in both modes — the switch only rescales
   // the totals and averages around it.
   check("weighbridge: the daily chart is unaffected by the switch",
-    /DAILY WASTE INTAKE/i.test(perDayText));
+    /WASTE INTAKE/i.test(perDayText) &&
+      JSON.stringify(
+        await section.evaluate((el) =>
+          [...el.querySelectorAll(".recharts-xAxis .recharts-cartesian-axis-tick-value")].map(
+            (t) => t.textContent
+          )
+        )
+      ).includes("15/10"));
   const perDayWaste = await readList("wb-waste-types");
   check("weighbridge: Per day rescales the ranked lists",
     perDayWaste?.[0] && Math.abs(perDayWaste[0].value - 1285) < 2 &&

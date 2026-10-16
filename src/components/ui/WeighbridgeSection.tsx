@@ -12,7 +12,14 @@ import {
   YAxis,
 } from "recharts";
 
-import type { WeighbridgeStation } from "@/lib/weighbridge";
+import {
+  bucketDays,
+  stationYears,
+  summariseStation,
+  yearRange,
+  type PeriodBucket,
+  type WeighbridgeStation,
+} from "@/lib/weighbridge";
 import { pick, t, type Lang } from "@/lib/i18n";
 import { cn, formatNumber } from "@/lib/utils";
 
@@ -56,26 +63,60 @@ const DISTRICT_COLORS = [
   "#2dd4bf",
 ];
 
+const MONTHS = {
+  en: ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
+  zh: ["1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"],
+};
+
+/** "2026-10-01" -> "01/10/2026". */
+function longDate(iso: string): string {
+  const [y, m, d] = iso.split("-");
+  return `${d}/${m}/${y}`;
+}
+
 /** "2026-10-01" -> "01/10". */
 function shortDate(iso: string): string {
   const [, m, d] = iso.split("-");
   return `${d}/${m}`;
 }
 
+/** Axis / tooltip label for a bucket key. */
+function bucketLabel(key: string, bucket: PeriodBucket, lang: Lang): string {
+  const months = MONTHS[lang];
+  switch (bucket) {
+    case "month": {
+      const [y, m] = key.split("-");
+      return `${months[Number(m) - 1]} ${y.slice(2)}`;
+    }
+    case "quarter": {
+      const [y, q] = key.split("-");
+      return lang === "zh" ? `${y.slice(2)}年第${q.slice(1)}季` : `${q} ${y.slice(2)}`;
+    }
+    case "year":
+      return key;
+    default:
+      return shortDate(key);
+  }
+}
+
 /** Which scale every figure in the block is shown on. */
 type Mode = "total" | "perDay";
 
-/** One headline figure. */
+/** One headline figure, with its load count underneath. */
 function Tile({
   label,
   value,
   unit,
+  loads,
+  loadsUnit,
   accent,
 }: {
   label: string;
   value: string;
-  unit?: string;
-  accent?: string;
+  unit: string;
+  loads: string;
+  loadsUnit: string;
+  accent: string;
 }) {
   return (
     <div className="rounded-xl border border-white/8 bg-white/[0.04] px-3 py-2.5">
@@ -84,14 +125,14 @@ function Tile({
       </p>
       <p
         className="mt-1 flex items-baseline gap-1 text-[length:calc(17px*var(--fs))] font-bold tabular-nums leading-none"
-        style={accent ? { color: accent } : undefined}
+        style={{ color: accent }}
       >
         {value}
-        {unit && (
-          <span className="text-[length:calc(10px*var(--fs))] font-medium text-white/45">
-            {unit}
-          </span>
-        )}
+        <span className="text-[length:calc(10px*var(--fs))] font-medium text-white/45">{unit}</span>
+      </p>
+      <p className="mt-1.5 text-[length:calc(10px*var(--fs))] tabular-nums text-white/45">
+        {loads}
+        <span className="ml-1 text-[length:calc(9px*var(--fs))] text-white/35">{loadsUnit}</span>
       </p>
     </div>
   );
@@ -198,12 +239,7 @@ function RankedList<T extends { tonnes: number }>({
     <div data-testid={testId} className="space-y-2.5">
       {visible.map((item, rank) => {
         const share = item.tonnes / denominator;
-        return render(
-          item,
-          share,
-          scaleToMax ? item.tonnes / maxTonnes : share,
-          rank
-        );
+        return render(item, share, scaleToMax ? item.tonnes / maxTonnes : share, rank);
       })}
       {(hidden > 0 || showAll) && (
         <button
@@ -235,30 +271,70 @@ function SectionHeading({ label }: { label: string }) {
   );
 }
 
-/** One half of the Per day / Total switch. */
-function ModeOption({
+/** One option in a small segmented control. */
+function Chip({
   active,
   label,
   onClick,
   testId,
+  disabled,
 }: {
   active: boolean;
   label: string;
   onClick: () => void;
   testId: string;
+  disabled?: boolean;
 }) {
   return (
     <button
       data-testid={testId}
       onClick={onClick}
+      disabled={disabled}
       aria-pressed={active}
       className={cn(
         "rounded-full px-2 py-0.5 text-[length:calc(10px*var(--fs))] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60",
-        active ? "bg-emerald-500 text-slate-950" : "text-white/55 hover:text-white"
+        active ? "bg-emerald-500 text-slate-950" : "text-white/55 hover:text-white",
+        disabled && "cursor-not-allowed opacity-40 hover:text-white/55"
       )}
     >
       {label}
     </button>
+  );
+}
+
+/** A labelled native date input, styled for the dark drawer. */
+function DateField({
+  label,
+  value,
+  min,
+  max,
+  onChange,
+  testId,
+}: {
+  label: string;
+  value: string;
+  min: string;
+  max: string;
+  onChange: (v: string) => void;
+  testId: string;
+}) {
+  return (
+    <label className="block">
+      <span className="mb-1 block text-[length:calc(9.5px*var(--fs))] uppercase tracking-wider text-white/40">
+        {label}
+      </span>
+      <input
+        data-testid={testId}
+        type="date"
+        value={value}
+        min={min}
+        max={max}
+        onChange={(e) => e.target.value && onChange(e.target.value)}
+        // `color-scheme` is what makes the native picker and its calendar icon
+        // render dark instead of a white panel with a black glyph.
+        className="w-full rounded-lg border border-white/12 bg-white/[0.06] px-2 py-1 text-[length:calc(10.5px*var(--fs))] tabular-nums text-white/85 [color-scheme:dark] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60"
+      />
+    </label>
   );
 }
 
@@ -269,9 +345,11 @@ function ModeOption({
  * per-facility throughput, whereas these are real per-weigh-in records. The two
  * are never mixed into one number.
  *
- * Everything in the block is shown on one scale at a time. The Per day / Total
- * switch rescales the headline tiles, the ranked lists and the chart together,
- * so a reader can never compare a period total against a daily average.
+ * Everything in the block is derived from one call to `summariseStation` for
+ * the selected date window, so the tiles, the chart and both ranked lists can
+ * never disagree about which period they are showing. The Per day / Total
+ * switch and the chart's Day/Month/Quarter/Year switch only change how those
+ * same rows are presented.
  */
 export default function WeighbridgeSection({
   records,
@@ -280,33 +358,40 @@ export default function WeighbridgeSection({
   records: WeighbridgeStation;
   lang: Lang;
 }) {
-  const { totals, period, daily, streams, wasteTypes, districts } = records;
+  const available = records.period;
+  const [range, setRange] = React.useState({ from: available.from, to: available.to });
   const [mode, setMode] = React.useState<Mode>("total");
+  const [bucket, setBucket] = React.useState<PeriodBucket>("day");
+
+  const years = React.useMemo(() => stationYears(records), [records]);
+  const summary = React.useMemo(
+    () => summariseStation(records, range.from, range.to),
+    [records, range]
+  );
 
   const perDay = mode === "perDay";
-  const days = period.operatingDays || 1;
+  const days = summary.operatingDays || 1;
   const scale = React.useCallback((v: number) => (perDay ? v / days : v), [perDay, days]);
-
-  const gtwWaste = wasteTypes.find((w) => w.gtw);
-  const gtwStream = streams.find((s) => s.key === "gtw");
-  const gtwTonnes = gtwStream?.tonnes ?? gtwWaste?.tonnes ?? 0;
-  const gtwLoads = gtwStream?.loads ?? gtwWaste?.loads ?? 0;
-
-  // Grease trap waste is its own stream and gets its own tile, so the waste-type
-  // list is the MSW list and shares are taken of MSW — otherwise a list that no
-  // longer contains GTW would still be measured against a total that does.
-  const mswTonnes = totals.tonnes - gtwTonnes;
-  const mswLoads = totals.loads - gtwLoads;
 
   const tonneUnit = perDay ? t("tpd", lang) : t("tonnes", lang);
   const loadUnit = perDay ? t("loadsPerDayUnit", lang) : t("loadsUnit", lang);
 
-  /**
-   * The chart is the daily intake series, and only ever that: it is the one
-   * thing in the block that is a day-by-day series rather than a total or an
-   * average, so the Per day / Total switch deliberately leaves it alone.
-   */
-  const chartData = daily;
+  const gtwWaste = records.wasteTypes.find((w) => w.gtw);
+  const total = summary.tonnes || 1;
+
+  const chartData = React.useMemo(() => {
+    const buckets = bucketDays(summary.daily, bucket);
+    return buckets.map((b) => ({
+      key: b.key,
+      label: bucketLabel(b.key, bucket, lang),
+      days: b.days,
+      private: b.private,
+      public: b.public,
+      gtw: b.gtw,
+    }));
+  }, [summary.daily, bucket, lang]);
+
+  const year = range.from.slice(0, 4);
 
   return (
     <section className="space-y-3.5 rounded-xl border border-emerald-400/15 bg-emerald-400/[0.04] px-3.5 py-3.5">
@@ -329,13 +414,13 @@ export default function WeighbridgeSection({
           aria-label={`${t("wbModePerDay", lang)} / ${t("wbModeTotal", lang)}`}
           className="flex shrink-0 items-center gap-0.5 rounded-full border border-white/12 bg-white/5 p-0.5"
         >
-          <ModeOption
+          <Chip
             testId="wb-mode-perday"
             active={perDay}
             label={t("wbModePerDay", lang)}
             onClick={() => setMode("perDay")}
           />
-          <ModeOption
+          <Chip
             testId="wb-mode-total"
             active={!perDay}
             label={t("wbModeTotal", lang)}
@@ -344,95 +429,193 @@ export default function WeighbridgeSection({
         </div>
       </div>
 
-      {/* Period. Operating days is its own tile below, so it is not repeated
-          here. */}
-      <span className="inline-block rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2 py-0.5 text-[length:calc(9px*var(--fs))] font-semibold uppercase tracking-wider text-emerald-200/90">
-        {shortDate(period.from)}–{shortDate(period.to)}
-      </span>
+      {/* Period. Every figure below is derived from this window. */}
+      <div
+        data-testid="wb-period"
+        className="space-y-2 rounded-xl border border-white/8 bg-white/[0.03] px-2.5 py-2.5"
+      >
+        <div className="grid grid-cols-2 gap-2">
+          <DateField
+            testId="wb-from"
+            label={t("wbFrom", lang)}
+            value={range.from}
+            min={available.from}
+            max={range.to}
+            onChange={(v) => setRange((r) => ({ ...r, from: v }))}
+          />
+          <DateField
+            testId="wb-to"
+            label={t("wbTo", lang)}
+            value={range.to}
+            min={range.from}
+            max={available.to}
+            onChange={(v) => setRange((r) => ({ ...r, to: v }))}
+          />
+        </div>
+
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+          <label className="flex items-center gap-1.5">
+            <span className="text-[length:calc(9.5px*var(--fs))] uppercase tracking-wider text-white/40">
+              {t("year", lang)}
+            </span>
+            <select
+              data-testid="wb-year"
+              value={years.includes(year) ? year : years[0]}
+              onChange={(e) => {
+                const next = yearRange(records, e.target.value);
+                setRange(next);
+              }}
+              className="rounded-lg border border-white/12 bg-white/[0.06] px-1.5 py-1 text-[length:calc(10.5px*var(--fs))] tabular-nums text-white/85 [color-scheme:dark] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60"
+            >
+              {years.map((y) => (
+                <option key={y} value={y}>
+                  {y}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <span className="text-[length:calc(9.5px*var(--fs))] tabular-nums text-white/40">
+            {summary.operatingDays} {t("wbDaysShort", lang)}
+          </span>
+
+          <button
+            data-testid="wb-full-period"
+            onClick={() => setRange({ from: available.from, to: available.to })}
+            className="ml-auto rounded-full border border-white/12 px-2 py-0.5 text-[length:calc(9.5px*var(--fs))] font-semibold text-white/55 transition-colors hover:bg-white/5 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60"
+          >
+            {t("wbFullPeriod", lang)}
+          </button>
+        </div>
+
+        <p className="text-[length:calc(9px*var(--fs))] text-white/35">
+          {t("wbAvailable", lang)}: {longDate(available.from)} – {longDate(available.to)}
+        </p>
+      </div>
 
       {/* Headline figures. Grease trap waste is broken out because it is a
           stream of its own, not part of the municipal solid waste intake. */}
       <div className="grid grid-cols-2 gap-2">
         <Tile
           label={t(perDay ? "wbMswPerDay" : "wbMswTotal", lang)}
-          value={formatNumber(scale(mswTonnes))}
+          value={formatNumber(scale(summary.mswTonnes))}
           unit={tonneUnit}
+          loads={formatNumber(scale(summary.mswLoads))}
+          loadsUnit={loadUnit}
           accent="#34d399"
         />
         <Tile
           label={t(perDay ? "wbGtwPerDay" : "wbGtwTotal", lang)}
-          value={formatNumber(scale(gtwTonnes))}
+          value={formatNumber(scale(summary.gtwTonnes))}
           unit={tonneUnit}
+          loads={formatNumber(scale(summary.gtwLoads))}
+          loadsUnit={loadUnit}
           accent="#f59e0b"
-        />
-        <Tile
-          label={t(perDay ? "weighbridgeLoadsPerDay" : "weighbridgeLoads", lang)}
-          value={formatNumber(scale(totals.loads))}
-          unit={perDay ? t("loadsPerDayUnit", lang) : undefined}
-        />
-        <Tile
-          label={t("weighbridgeDays", lang)}
-          value={String(period.operatingDays)}
         />
       </div>
 
-      {/* Daily intake, split by delivery stream. Unaffected by the switch —
-          this is the day-by-day series, not a total or an average. */}
+      {/* Intake across the window, split by delivery stream. The bucket switch
+          changes the x axis only — never the window the rest of the card is
+          showing. */}
       <div>
-        <SectionHeading label={t("weighbridgeDaily", lang)} />
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <p className="text-[length:calc(10px*var(--fs))] font-semibold uppercase tracking-wider text-white/40">
+            {t("weighbridgeDaily", lang)}
+          </p>
+          <div
+            data-testid="wb-bucket"
+            role="group"
+            aria-label={t("wbGranularity", lang)}
+            className="flex shrink-0 items-center gap-0.5 rounded-full border border-white/12 bg-white/5 p-0.5"
+          >
+            {(["day", "month", "quarter", "year"] as PeriodBucket[]).map((b) => (
+              <Chip
+                key={b}
+                testId={`wb-bucket-${b}`}
+                active={bucket === b}
+                label={t(
+                  b === "day"
+                    ? "wbBucketDay"
+                    : b === "month"
+                      ? "wbBucketMonth"
+                      : b === "quarter"
+                        ? "wbBucketQuarter"
+                        : "wbBucketYear",
+                  lang
+                )}
+                onClick={() => setBucket(b)}
+              />
+            ))}
+          </div>
+        </div>
+
         <div className="rounded-xl border border-white/8 bg-white/[0.03] p-2 pt-3">
-          <ResponsiveContainer width="100%" height={150}>
-            <LineChart data={chartData} margin={{ top: 4, right: 8, left: -8, bottom: 0 }}>
-              <CartesianGrid
-                strokeDasharray="3 3"
-                stroke="rgba(255,255,255,0.07)"
-                vertical={false}
-              />
-              <XAxis
-                dataKey="date"
-                tickLine={false}
-                axisLine={false}
-                interval={1}
-                tick={{ fill: "rgba(255,255,255,0.45)", fontSize: 9 }}
-                tickFormatter={shortDate}
-              />
-              <YAxis
-                tickLine={false}
-                axisLine={false}
-                width={46}
-                domain={[0, "auto"]}
-                tick={{ fill: "rgba(255,255,255,0.45)", fontSize: 9 }}
-                tickFormatter={(v: number) => formatNumber(v)}
-              />
-              <Tooltip
-                cursor={{ stroke: "rgba(255,255,255,0.2)" }}
-                contentStyle={{
-                  background: "rgba(15,23,42,0.96)",
-                  border: "1px solid rgba(255,255,255,0.14)",
-                  borderRadius: 10,
-                  fontSize: 11,
-                  padding: "8px 10px",
-                }}
-                labelStyle={{ color: "rgba(255,255,255,0.55)", fontSize: 10 }}
-                labelFormatter={(label) => String(label)}
-                formatter={(value: number, name: string) => [
-                  `${formatNumber(value)} ${t("tonnes", lang)}`,
-                  t(STREAM_LABEL_KEY[name as StreamKey] ?? "streamPrivate", lang),
-                ]}
-              />
-              {STREAMS.map((key) => (
-                <Line
-                  key={key}
-                  type="monotone"
-                  dataKey={key}
-                  stroke={STREAM_COLOR[key]}
-                  strokeWidth={2}
-                  dot={false}
-                  activeDot={{ r: 3 }}
+          {chartData.length === 0 ? (
+            <p className="py-8 text-center text-[length:calc(10.5px*var(--fs))] text-white/40">
+              {t("wbNoData", lang)}
+            </p>
+          ) : (
+            <ResponsiveContainer width="100%" height={150}>
+              <LineChart data={chartData} margin={{ top: 4, right: 8, left: -8, bottom: 0 }}>
+                <CartesianGrid
+                  strokeDasharray="3 3"
+                  stroke="rgba(255,255,255,0.07)"
+                  vertical={false}
                 />
-              ))}
-            </LineChart>
-          </ResponsiveContainer>
+                <XAxis
+                  dataKey="label"
+                  tickLine={false}
+                  axisLine={false}
+                  interval="preserveStartEnd"
+                  minTickGap={12}
+                  tick={{ fill: "rgba(255,255,255,0.45)", fontSize: 9 }}
+                />
+                <YAxis
+                  tickLine={false}
+                  axisLine={false}
+                  width={46}
+                  domain={[0, "auto"]}
+                  tick={{ fill: "rgba(255,255,255,0.45)", fontSize: 9 }}
+                  tickFormatter={(v: number) => formatNumber(v)}
+                />
+                <Tooltip
+                  cursor={{ stroke: "rgba(255,255,255,0.2)" }}
+                  contentStyle={{
+                    background: "rgba(15,23,42,0.96)",
+                    border: "1px solid rgba(255,255,255,0.14)",
+                    borderRadius: 10,
+                    fontSize: 11,
+                    padding: "8px 10px",
+                  }}
+                  labelStyle={{ color: "rgba(255,255,255,0.55)", fontSize: 10 }}
+                  labelFormatter={(label, payload) => {
+                    const days = payload?.[0]?.payload?.days;
+                    // A bucket that holds fewer days than it should is partial
+                    // — say so rather than letting a short October read as a
+                    // collapse in intake.
+                    return days && bucket !== "day"
+                      ? `${label} · ${days} ${t("wbDaysShort", lang)}`
+                      : String(label);
+                  }}
+                  formatter={(value: number, name: string) => [
+                    `${formatNumber(value)} ${t("tonnes", lang)}`,
+                    t(STREAM_LABEL_KEY[name as StreamKey] ?? "streamPrivate", lang),
+                  ]}
+                />
+                {STREAMS.map((key) => (
+                  <Line
+                    key={key}
+                    type="monotone"
+                    dataKey={key}
+                    stroke={STREAM_COLOR[key]}
+                    strokeWidth={2}
+                    dot={bucket !== "day"}
+                    activeDot={{ r: 3 }}
+                  />
+                ))}
+              </LineChart>
+            </ResponsiveContainer>
+          )}
 
           {/* Series legend + what the line is measuring */}
           <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 px-1">
@@ -450,7 +633,16 @@ export default function WeighbridgeSection({
             ))}
           </div>
           <p className="mt-1 px-1 text-[length:calc(9px*var(--fs))] leading-relaxed text-white/35">
-            {t("wbChartDailyCaption", lang)}
+            {t(
+              bucket === "day"
+                ? "wbCaptionDay"
+                : bucket === "month"
+                  ? "wbCaptionMonth"
+                  : bucket === "quarter"
+                    ? "wbCaptionQuarter"
+                    : "wbCaptionYear",
+              lang
+            )}
           </p>
         </div>
       </div>
@@ -459,7 +651,7 @@ export default function WeighbridgeSection({
       <div>
         <SectionHeading label={t("weighbridgeStreams", lang)} />
         <div data-testid="wb-streams" className="space-y-2.5">
-          {streams.map((s) => (
+          {summary.streams.map((s) => (
             <RankedBar
               key={s.key}
               label={pick(lang, s.labelEn, s.labelZh)}
@@ -474,7 +666,7 @@ export default function WeighbridgeSection({
             />
           ))}
         </div>
-        {gtwWaste && (
+        {gtwWaste && summary.gtwTonnes > 0 && (
           <div className="mt-2.5 flex items-start gap-2 rounded-lg border border-amber-400/20 bg-amber-400/[0.07] px-2.5 py-2">
             <Info className="mt-0.5 h-3 w-3 shrink-0 text-amber-300/80" />
             <p className="text-[length:calc(10px*var(--fs))] leading-relaxed text-amber-100/80">
@@ -489,9 +681,9 @@ export default function WeighbridgeSection({
       <div>
         <SectionHeading label={t("weighbridgeWasteTypes", lang)} />
         <RankedList
-          items={wasteTypes.filter((w) => !w.gtw)}
+          items={summary.wasteTypes.filter((w) => !w.gtw)}
           defaultCount={6}
-          total={mswTonnes}
+          total={summary.mswTonnes}
           scaleToMax
           lang={lang}
           testId="wb-waste-types"
@@ -516,9 +708,9 @@ export default function WeighbridgeSection({
       <div>
         <SectionHeading label={t("weighbridgeDistricts", lang)} />
         <RankedList
-          items={districts}
+          items={summary.districts}
           defaultCount={6}
-          total={totals.tonnes}
+          total={total}
           scaleToMax
           lang={lang}
           testId="wb-districts"
