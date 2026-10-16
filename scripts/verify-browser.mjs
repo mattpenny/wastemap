@@ -3,8 +3,10 @@
  * revision. Boots the page in system Chrome, captures console/page errors, and
  * verifies:
  *   1. the opening state — all three cards collapsed, RTS filter pre-selected;
- *   2. the header stats, the ranking card, the facility drawer (headline figures
- *      only by default, full detail behind the Detail toggle);
+ *   2. the header stats, the ranking card, the facility drawer (the published
+ *      EPD figures and everything else sit behind the Detail toggle, which must
+ *      also bring the revealed section into view — it opens ~1,500px down the
+ *      drawer's scroller);
  *   3. that the Hong Kong-wide trend chart lives in its own panel rather than in
  *      the drawer.
  * Saves screenshots to out/verify/.
@@ -170,7 +172,13 @@ await page.waitForTimeout(1500);
 const drawer = page.locator('aside[role="dialog"]');
 check("drawer open", (await drawer.count()) === 1);
 let drawerText = await drawer.innerText();
-check("drawer shows IETS throughput 1,225", drawerText.includes("1,225"));
+// The published throughput and design capacity now live behind the Detail
+// toggle, so a facility with no weighbridge records opens on the hint that
+// points at it — not on the figures themselves.
+check("drawer default hides the published throughput", !drawerText.includes("1,225"));
+check("drawer default hides Design capacity", !/DESIGN CAPACITY/.test(drawerText));
+check("drawer default offers the Detail hint",
+  (await drawer.locator('[data-testid="detail-hint"]').count()) === 1);
 // Note: the provenance note legitimately mentions "coordinates" in prose, so
 // match the uppercase MetaRow label specifically.
 check("drawer default hides Location", !/LOCATION/.test(drawerText));
@@ -187,8 +195,25 @@ await page.screenshot({ path: path.join(OUT_DIR, "drawer-iets-default.png") });
 const detailBtn = drawer.getByRole("button", { name: /show facility detail/i });
 check("Detail toggle present next to name", (await detailBtn.count()) === 1);
 await detailBtn.click();
-await page.waitForTimeout(800);
+// Smooth scroll of the revealed section takes a moment to settle.
+await page.waitForTimeout(1500);
 drawerText = await drawer.innerText();
+
+// The toggle used to look broken: the section did open, but a long way down
+// the drawer's scroller, so nothing on screen changed. Assert the revealed
+// content is actually inside the drawer's viewport.
+{
+  const drawerBox = await drawer.boundingBox();
+  const locBox = await drawer.getByText("Location", { exact: true }).first().boundingBox();
+  check("detail scrolls the revealed section into view",
+    Boolean(locBox && drawerBox) &&
+      locBox.y > drawerBox.y &&
+      locBox.y < drawerBox.y + drawerBox.height,
+    JSON.stringify({ locY: locBox?.y, drawerY: drawerBox?.y, h: drawerBox?.height }));
+}
+
+check("detail shows the published throughput 1,225", drawerText.includes("1,225"));
+check("detail shows Design capacity", /DESIGN CAPACITY/.test(drawerText));
 check("detail shows Location", /LOCATION/.test(drawerText));
 check("detail shows Sun Yip Street address", /Sun Yip Street/i.test(drawerText));
 check("detail shows November 1992", /November 1992/i.test(drawerText));
@@ -226,9 +251,13 @@ check("All filter restores 11/19 published", bodyText.includes("11/19"));
 const went = page.locator("button", { hasText: "West New Territories Landfill" }).first();
 await went.click();
 await page.waitForTimeout(1200);
-const wentText = await page.locator('aside[role="dialog"]').innerText();
-check("WENT drawer shows 6,400 tpd", wentText.includes("6,400"));
-check("WENT drawer shows 61 Mm3 void", /61/.test(wentText));
+const wentDrawer = page.locator('aside[role="dialog"]');
+// Both figures sit behind the Detail toggle now.
+await wentDrawer.getByRole("button", { name: /show facility detail/i }).click();
+await page.waitForTimeout(1500);
+const wentText = await wentDrawer.innerText();
+check("WENT detail shows 6,400 tpd", wentText.includes("6,400"));
+check("WENT detail shows 61 Mm3 void", /61/.test(wentText));
 await page.locator('button[aria-label="Close" i]').first().click().catch(() => {});
 await page.waitForTimeout(600);
 
@@ -249,7 +278,7 @@ if (await oitf.count()) {
 // =====================================================================
 // 9. WKTS weighbridge records — the measured-intake block
 // =====================================================================
-// A different source from the EPD tiles above it: real per-weigh-in records
+// A different source from the EPD facility record: real per-weigh-in records
 // from the station's own weighbridge. Only WKTS reports any, so this section
 // also proves the block stays absent for every other station (see the IETS
 // drawer checks in section 4, which assert no chart appears there).
@@ -264,19 +293,27 @@ if (await oitf.count()) {
   check("WKTS drawer shows the weighbridge block", (await section.count()) === 1);
 
   const wbText = await section.innerText();
-  check("weighbridge: total received 50,033 t", wbText.includes("50,033"), wbText.slice(0, 120));
-  check("weighbridge: average 3,336 t/day", /3,33[56]/.test(wbText));
+  // The intake is split MSW / GTW, so the two tiles sum to the period total
+  // (42,507 + 7,526 = 50,033) rather than showing it as one figure.
+  check("weighbridge: total received MSW 42,507 t", wbText.includes("42,507"), wbText.slice(0, 160));
+  check("weighbridge: total received GTW 7,526 t", wbText.includes("7,526"));
   check("weighbridge: 12,015 weigh-ins", wbText.includes("12,015"));
   check("weighbridge: 15 operating days", /\b15\b/.test(wbText));
   check("weighbridge: labelled as measured, not published", /MEASURED INTAKE/i.test(wbText));
-  check("weighbridge: states the source is operator records, not EPD",
-    /not an EPD publication/i.test(wbText));
+  // Both were removed on request: the card no longer sets a measured intake
+  // against the EPD published rate, nor shows the station's maintenance loads.
+  check("weighbridge: no measured-vs-published paragraph",
+    !/against an EPD published rate/i.test(wbText));
+  check("weighbridge: maintenance note removed", !/Station maintenance/i.test(wbText));
+  check("weighbridge: provenance footnote removed", !/not an EPD publication/i.test(wbText));
 
-  // GTW — the waste type only WKTS takes.
-  check("weighbridge: GTW appears as a waste type", /grease trap waste/i.test(wbText));
+  // GTW is its own delivery stream and its own tile, so it is no longer a row
+  // in the waste-type list.
+  check("weighbridge: GTW is a delivery stream", /Grease trap waste/i.test(wbText));
   check("weighbridge: says WKTS is the only station taking GTW",
     /only transfer station/i.test(wbText));
-  check("weighbridge: GTW tonnage 7,526 t", wbText.includes("7,526"));
+  check("weighbridge: GTW row removed from the waste-type list",
+    !/grease trap waste \(GTW\)/i.test(wbText));
 
   // Private vs public, as specified.
   check("weighbridge: private vehicles row", /Private vehicles/i.test(wbText));
@@ -289,17 +326,30 @@ if (await oitf.count()) {
   check("weighbridge: lists Kwai Tsing", /Kwai Tsing/i.test(wbText));
   check("weighbridge: waste type section", /WASTE TYPE/i.test(wbText));
 
-  // Measured vs published must be reconciled, not left as two bare numbers.
-  check("weighbridge: reconciles measured intake with the EPD published rate",
-    /against an EPD published rate of 2,700/i.test(wbText) && /\+23\.5%/.test(wbText));
-
+  // The intake chart is three lines by delivery stream, not a stack of bars.
+  const chartKind = await section.evaluate((el) => {
+    const w = el.querySelector(".recharts-wrapper");
+    return {
+      lines: w?.querySelectorAll(".recharts-line").length ?? 0,
+      bars: w?.querySelectorAll(".recharts-bar").length ?? 0,
+      // First and last x labels, to prove the series is daily and not a
+      // running total.
+      ticks: [...(w?.querySelectorAll(".recharts-xAxis .recharts-cartesian-axis-tick-value") ?? [])]
+        .map((t) => t.textContent),
+    };
+  });
+  check("weighbridge: intake chart is a 3-line chart",
+    chartKind.lines === 3 && chartKind.bars === 0, JSON.stringify(chartKind));
+  check("weighbridge: intake chart is the daily series",
+    chartKind.ticks[0] === "01/10" && chartKind.ticks.includes("15/10"),
+    JSON.stringify(chartKind.ticks));
   check("weighbridge: exactly one chart in the drawer",
     (await drawer.locator(".recharts-wrapper").count()) === 1);
 
   // --- bar geometry ---
-  // These bars are sized from each row's share of intake. An earlier build
-  // passed Array.map's index as the share, so the bars read 0%, 100%, 200%…
-  // and every one past the first was clipped to full width — which looked
+  // Bars are sized from each row's share of its list's denominator. An earlier
+  // build passed Array.map's index as the share, so the bars read 0%, 100%,
+  // 200%… and every one past the first was clipped to full width — which looked
   // plausible on screen. Assert the geometry, not just the text.
   const readList = (id) =>
     page.evaluate((sel) => {
@@ -307,9 +357,16 @@ if (await oitf.count()) {
       if (!root) return null;
       return [...root.querySelectorAll("div.space-y-1")].map((row) => {
         const label = row.querySelector("span")?.innerText?.trim() ?? "";
-        const pctText = row.querySelector("span.w-24")?.innerText?.replace(/\s+/g, " ").trim() ?? "";
+        const value = row.querySelector("span.font-semibold.tabular-nums")?.innerText ?? "";
+        const pctText = row.querySelector("span.w-28")?.innerText?.replace(/\s+/g, " ").trim() ?? "";
         const bar = row.querySelector('div[style*="width"]');
-        return { label, pctText, width: Number.parseFloat(bar?.style?.width ?? "0") };
+        return {
+          label,
+          value: Number.parseFloat(value.replace(/,/g, "")),
+          pctText,
+          width: Number.parseFloat(bar?.style?.width ?? "0"),
+          color: bar?.style?.backgroundColor ?? "",
+        };
       });
     }, `[data-testid="${id}"]`);
 
@@ -321,13 +378,16 @@ if (await oitf.count()) {
   check("weighbridge: bars are proportional, not index-sized",
     allBars.length > 0 && allBars.every((b) => b.width > 0 && b.width <= 100),
     JSON.stringify(allBars.map((b) => b.width)));
-  check("weighbridge: every bar matches its printed share",
-    allBars.every((b) => {
+
+  // Streams are drawn against total intake, so their width IS the printed
+  // share. The two ranked lists are drawn against their own largest row so the
+  // long tail stays visible; their printed % is still the share of intake.
+  check("weighbridge: stream bars match their printed share",
+    wbStreams?.every((b) => {
       const printed = Number.parseFloat(b.pctText);
       return Number.isFinite(printed) && Math.abs(printed - b.width) < 0.15;
     }),
-    JSON.stringify(allBars.map((b) => `${b.width}/${b.pctText}`)));
-
+    JSON.stringify(wbStreams?.map((b) => `${b.width}/${b.pctText}`)));
   check("weighbridge: stream bars are 52.2 / 32.8 / 15.0",
     wbStreams?.length === 3 &&
       Math.abs(wbStreams[0].width - 52.2) < 0.2 &&
@@ -335,19 +395,62 @@ if (await oitf.count()) {
       Math.abs(wbStreams[2].width - 15.0) < 0.2,
     JSON.stringify(wbStreams?.map((b) => b.width)));
 
-  check("weighbridge: waste type list starts at 38.5% and descends",
-    wbWaste?.[0] && Math.abs(wbWaste[0].width - 38.5) < 0.2 &&
+  check("weighbridge: waste-type bars scale to the largest type and descend",
+    wbWaste?.[0] && Math.abs(wbWaste[0].width - 100) < 0.2 &&
       wbWaste.every((b, i) => i === 0 || b.width <= wbWaste[i - 1].width),
     JSON.stringify(wbWaste?.map((b) => b.width)));
 
-  const gtwRow = wbWaste?.find((b) => /grease trap waste \(GTW\)/i.test(b.label));
-  check("weighbridge: GTW row is 15% of intake", gtwRow && Math.abs(gtwRow.width - 15) < 0.2,
-    JSON.stringify(gtwRow));
+  // Shares are of MSW now that the GTW row is gone, so the top type reads 45.3%
+  // (19,272 of 42,507) rather than 38.5% of all intake.
+  check("weighbridge: top waste type is 45.3% of MSW",
+    wbWaste?.[0] && Math.abs(Number.parseFloat(wbWaste[0].pctText) - 45.3) < 0.2,
+    JSON.stringify(wbWaste?.[0]));
 
-  check("weighbridge: district list starts at 17.6% and descends",
-    wbDistricts?.[0] && Math.abs(wbDistricts[0].width - 17.6) < 0.2 &&
+  // The district complaint: the bars were drawn against all intake, so the
+  // largest district filled only 17.6% of its track. They now scale to the
+  // largest district, and each row carries its own colour.
+  check("weighbridge: district bars scale to the largest district and descend",
+    wbDistricts?.[0] && Math.abs(wbDistricts[0].width - 100) < 0.2 &&
       wbDistricts.every((b, i) => i === 0 || b.width <= wbDistricts[i - 1].width),
     JSON.stringify(wbDistricts?.map((b) => b.width)));
+  check("weighbridge: district rows are differently coloured",
+    new Set((wbDistricts ?? []).map((b) => b.color)).size === wbDistricts?.length,
+    JSON.stringify(wbDistricts?.map((b) => b.color)));
+  check("weighbridge: top district is still 17.6% of intake",
+    wbDistricts?.[0] && Math.abs(Number.parseFloat(wbDistricts[0].pctText) - 17.6) < 0.2,
+    JSON.stringify(wbDistricts?.[0]?.pctText));
+
+  // --- the Per day / Total switch ---
+  check("weighbridge: Per day / Total switch present",
+    (await section.locator('[data-testid="wb-mode"]').count()) === 1);
+  check("weighbridge: opens on Total",
+    (await section.locator('[data-testid="wb-mode-total"]').getAttribute("aria-pressed")) === "true");
+
+  await section.locator('[data-testid="wb-mode-perday"]').click();
+  await page.waitForTimeout(600);
+  const perDayText = await section.innerText();
+  check("weighbridge: Per day relabels the tiles",
+    /MSW PER DAY/i.test(perDayText) && /GTW PER DAY/i.test(perDayText));
+  // 42,507.25 / 15 and 7,526.11 / 15.
+  check("weighbridge: Per day rescales the tiles",
+    perDayText.includes("2,834") && perDayText.includes("502") && perDayText.includes("801"),
+    perDayText.slice(0, 160));
+  // The chart stays the daily series in both modes — the switch only rescales
+  // the totals and averages around it.
+  check("weighbridge: the daily chart is unaffected by the switch",
+    /DAILY WASTE INTAKE/i.test(perDayText));
+  const perDayWaste = await readList("wb-waste-types");
+  check("weighbridge: Per day rescales the ranked lists",
+    perDayWaste?.[0] && Math.abs(perDayWaste[0].value - 1285) < 2 &&
+      Math.abs(Number.parseFloat(perDayWaste[0].pctText) - 45.3) < 0.2,
+    JSON.stringify(perDayWaste?.[0]));
+  await page.screenshot({ path: path.join(OUT_DIR, "wkts-weighbridge-perday.png") });
+
+  await section.locator('[data-testid="wb-mode-total"]').click();
+  await page.waitForTimeout(600);
+  const backToTotal = await section.innerText();
+  check("weighbridge: switching back restores the period totals",
+    backToTotal.includes("42,507") && /TOTAL RECEIVED \(MSW\)/i.test(backToTotal));
 
   // --- ranked lists expand ---
   const moreButtons = section.locator('[data-testid="ranked-more"]');
@@ -621,8 +724,9 @@ if (await oitf.count()) {
     return {
       shown: Boolean(sec),
       width: sec ? Math.round(sec.getBoundingClientRect().width) : 0,
-      hasTotal: /50,033/.test(text),
+      hasMsw: /42,507/.test(text),
       hasGtw: /grease trap waste/i.test(text),
+      modeToggle: Boolean(sec?.querySelector('[data-testid="wb-mode"]')),
       charts: drawer?.querySelectorAll(".recharts-wrapper").length ?? 0,
       barsInRange: bars.length > 0 && bars.every((w) => w > 0 && w <= 100),
       scrollW: document.documentElement.scrollWidth,
@@ -631,7 +735,8 @@ if (await oitf.count()) {
   });
   check("mobile: WKTS drawer shows the weighbridge block", mobileWb.shown, JSON.stringify(mobileWb));
   check("mobile: weighbridge figures render in the bottom sheet",
-    mobileWb.hasTotal && mobileWb.hasGtw && mobileWb.charts === 1, JSON.stringify(mobileWb));
+    mobileWb.hasMsw && mobileWb.hasGtw && mobileWb.charts === 1, JSON.stringify(mobileWb));
+  check("mobile: weighbridge mode switch renders in the bottom sheet", mobileWb.modeToggle);
   check("mobile: weighbridge bars stay proportional", mobileWb.barsInRange);
   check("mobile: weighbridge drawer causes no horizontal overflow",
     mobileWb.scrollW <= mobileWb.vw, `${mobileWb.scrollW}/${mobileWb.vw}`);

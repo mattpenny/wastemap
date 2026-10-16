@@ -1,11 +1,11 @@
 "use client";
 
 import * as React from "react";
-import { ChevronDown, ChevronUp, Info, Scale, Truck } from "lucide-react";
+import { ChevronDown, ChevronUp, Info, Scale } from "lucide-react";
 import {
-  Bar,
-  BarChart,
   CartesianGrid,
+  Line,
+  LineChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -16,18 +16,54 @@ import type { WeighbridgeStation } from "@/lib/weighbridge";
 import { pick, t, type Lang } from "@/lib/i18n";
 import { cn, formatNumber } from "@/lib/utils";
 
-/** One colour per delivery stream, reused by the chart and the legend. */
+/** One colour per delivery stream, reused by the chart and its legend. */
 const STREAM_COLOR: Record<string, string> = {
   private: "#60a5fa",
   public: "#34d399",
   gtw: "#f59e0b",
 };
 
+/** Chart/tooltip series, in the order the legend reads. */
+const STREAMS = ["private", "public", "gtw"] as const;
+
+type StreamKey = (typeof STREAMS)[number];
+
+const STREAM_LABEL_KEY: Record<StreamKey, "streamPrivate" | "streamPublic" | "streamGtw"> = {
+  private: "streamPrivate",
+  public: "streamPublic",
+  gtw: "streamGtw",
+};
+
+/**
+ * One colour per source district.
+ *
+ * Ranked rather than hashed: the palette follows the sort order, so the
+ * largest source is always the same colour and no two neighbouring rows can
+ * collide onto the same hue.
+ */
+const DISTRICT_COLORS = [
+  "#60a5fa",
+  "#34d399",
+  "#fbbf24",
+  "#f472b6",
+  "#a78bfa",
+  "#22d3ee",
+  "#fb923c",
+  "#4ade80",
+  "#e879f9",
+  "#38bdf8",
+  "#facc15",
+  "#2dd4bf",
+];
+
 /** "2026-10-01" -> "01/10". */
 function shortDate(iso: string): string {
   const [, m, d] = iso.split("-");
   return `${d}/${m}`;
 }
+
+/** Which scale every figure in the block is shown on. */
+type Mode = "total" | "perDay";
 
 /** One headline figure. */
 function Tile({
@@ -64,27 +100,33 @@ function Tile({
 /**
  * One ranked row: a label, a proportional bar, and the tonnage.
  *
- * `share` is of total received tonnage, so the bars are directly comparable
- * across the waste-type and district lists.
+ * `share` is of the list's own denominator and is what gets printed. `barShare`
+ * is what the bar is drawn from — the same number for the streams list, but a
+ * fraction of the list's largest row for the waste-type and district lists, so
+ * a long tail of small sources stays readable instead of collapsing to nothing.
  */
 function RankedBar({
   label,
   sub,
-  tonnes,
+  value,
+  unit,
   loads,
+  loadsUnit,
   share,
+  barShare,
   color,
   highlight,
-  lang,
 }: {
   label: string;
   sub?: string;
-  tonnes: number;
+  value: number;
+  unit: string;
   loads: number;
+  loadsUnit: string;
   share: number;
+  barShare: number;
   color: string;
   highlight?: boolean;
-  lang: Lang;
 }) {
   return (
     <div className="space-y-1">
@@ -99,9 +141,9 @@ function RankedBar({
           {label}
         </span>
         <span className="shrink-0 text-[length:calc(11px*var(--fs))] font-semibold tabular-nums text-white/70">
-          {formatNumber(tonnes)}
+          {formatNumber(value)}
           <span className="ml-1 text-[length:calc(9px*var(--fs))] font-normal text-white/35">
-            {t("tonnes", lang)}
+            {unit}
           </span>
         </span>
       </div>
@@ -109,11 +151,13 @@ function RankedBar({
         <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-white/8">
           <div
             className="h-full rounded-full"
-            style={{ width: `${Math.max(share * 100, 0.6)}%`, backgroundColor: color }}
+            style={{ width: `${Math.min(Math.max(barShare * 100, 1.5), 100)}%`, backgroundColor: color }}
           />
         </div>
-        <span className="w-24 shrink-0 text-right text-[length:calc(9px*var(--fs))] tabular-nums text-white/35">
-          {(share * 100).toFixed(1)}% · {formatNumber(loads)} {t("loadsUnit", lang)}
+        {/* w-28, not w-24: "52.2% · 427 loads/d" is the longest string the
+            Per day scale produces and it ran past a 96px column. */}
+        <span className="w-28 shrink-0 text-right text-[length:calc(9px*var(--fs))] tabular-nums text-white/35">
+          {(share * 100).toFixed(1)}% · {formatNumber(loads)} {loadsUnit}
         </span>
       </div>
     </div>
@@ -125,15 +169,18 @@ function RankedList<T extends { tonnes: number }>({
   items,
   render,
   defaultCount,
+  /** Denominator for the printed share of every row. */
   total,
+  /** Draw each bar against the largest row instead of against `total`. */
+  scaleToMax = false,
   lang,
   testId,
 }: {
   items: T[];
-  render: (item: T, share: number) => React.ReactNode;
+  render: (item: T, share: number, barShare: number, rank: number) => React.ReactNode;
   defaultCount: number;
-  /** Denominator for every share in this list. */
   total: number;
+  scaleToMax?: boolean;
   lang: Lang;
   testId?: string;
 }) {
@@ -141,10 +188,23 @@ function RankedList<T extends { tonnes: number }>({
   const visible = showAll ? items : items.slice(0, defaultCount);
   const hidden = items.length - visible.length;
 
+  // `share` and `barShare` must be computed here, not read off Array.map's
+  // index — an earlier build passed the index as the share and the bars read
+  // 0%, 100%, 200%…
+  const denominator = total || 1;
+  const maxTonnes = items.reduce((m, i) => Math.max(m, i.tonnes), 0) || 1;
+
   return (
     <div data-testid={testId} className="space-y-2.5">
-      {/* `share` must be computed here, not read off Array.map's index. */}
-      {visible.map((item) => render(item, item.tonnes / (total || 1)))}
+      {visible.map((item, rank) => {
+        const share = item.tonnes / denominator;
+        return render(
+          item,
+          share,
+          scaleToMax ? item.tonnes / maxTonnes : share,
+          rank
+        );
+      })}
       {(hidden > 0 || showAll) && (
         <button
           data-testid="ranked-more"
@@ -175,38 +235,82 @@ function SectionHeading({ label }: { label: string }) {
   );
 }
 
+/** One half of the Per day / Total switch. */
+function ModeOption({
+  active,
+  label,
+  onClick,
+  testId,
+}: {
+  active: boolean;
+  label: string;
+  onClick: () => void;
+  testId: string;
+}) {
+  return (
+    <button
+      data-testid={testId}
+      onClick={onClick}
+      aria-pressed={active}
+      className={cn(
+        "rounded-full px-2 py-0.5 text-[length:calc(10px*var(--fs))] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60",
+        active ? "bg-emerald-500 text-slate-950" : "text-white/55 hover:text-white"
+      )}
+    >
+      {label}
+    </button>
+  );
+}
+
 /**
  * Measured station intake from the operator's weighbridge.
  *
- * Deliberately a distinct block from the EPD figures above it: EPD publishes
- * no per-facility throughput, whereas these are real per-weigh-in records. The
- * two are never mixed into one number.
+ * Deliberately a distinct block from the EPD facility record: EPD publishes no
+ * per-facility throughput, whereas these are real per-weigh-in records. The two
+ * are never mixed into one number.
+ *
+ * Everything in the block is shown on one scale at a time. The Per day / Total
+ * switch rescales the headline tiles, the ranked lists and the chart together,
+ * so a reader can never compare a period total against a daily average.
  */
 export default function WeighbridgeSection({
   records,
   lang,
-  publishedTpd,
 }: {
   records: WeighbridgeStation;
   lang: Lang;
-  /** EPD's published rate for the same station, when there is one. */
-  publishedTpd?: number | null;
 }) {
   const { totals, period, daily, streams, wasteTypes, districts } = records;
-  const gtwWaste = wasteTypes.find((w) => w.gtw);
-  const total = totals.tonnes || 1;
+  const [mode, setMode] = React.useState<Mode>("total");
 
-  // The drawer shows an EPD published rate directly above this block. Those are
-  // two different kinds of number — a published rate and a measured intake —
-  // so state the comparison rather than leaving the reader to guess.
-  const delta =
-    typeof publishedTpd === "number" && publishedTpd > 0
-      ? Math.round(((totals.tonnesPerDay - publishedTpd) / publishedTpd) * 1000) / 10
-      : null;
+  const perDay = mode === "perDay";
+  const days = period.operatingDays || 1;
+  const scale = React.useCallback((v: number) => (perDay ? v / days : v), [perDay, days]);
+
+  const gtwWaste = wasteTypes.find((w) => w.gtw);
+  const gtwStream = streams.find((s) => s.key === "gtw");
+  const gtwTonnes = gtwStream?.tonnes ?? gtwWaste?.tonnes ?? 0;
+  const gtwLoads = gtwStream?.loads ?? gtwWaste?.loads ?? 0;
+
+  // Grease trap waste is its own stream and gets its own tile, so the waste-type
+  // list is the MSW list and shares are taken of MSW — otherwise a list that no
+  // longer contains GTW would still be measured against a total that does.
+  const mswTonnes = totals.tonnes - gtwTonnes;
+  const mswLoads = totals.loads - gtwLoads;
+
+  const tonneUnit = perDay ? t("tpd", lang) : t("tonnes", lang);
+  const loadUnit = perDay ? t("loadsPerDayUnit", lang) : t("loadsUnit", lang);
+
+  /**
+   * The chart is the daily intake series, and only ever that: it is the one
+   * thing in the block that is a day-by-day series rather than a total or an
+   * average, so the Per day / Total switch deliberately leaves it alone.
+   */
+  const chartData = daily;
 
   return (
     <section className="space-y-3.5 rounded-xl border border-emerald-400/15 bg-emerald-400/[0.04] px-3.5 py-3.5">
-      {/* Heading */}
+      {/* Heading + the Per day / Total switch */}
       <div className="flex items-start justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2">
           <Scale className="h-4 w-4 shrink-0 text-emerald-300/80" />
@@ -219,28 +323,52 @@ export default function WeighbridgeSection({
             </p>
           </div>
         </div>
-        <span className="shrink-0 rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2 py-0.5 text-[length:calc(9px*var(--fs))] font-semibold uppercase tracking-wider text-emerald-200/90">
-          {shortDate(period.from)}–{shortDate(period.to)}
-        </span>
+        <div
+          data-testid="wb-mode"
+          role="group"
+          aria-label={`${t("wbModePerDay", lang)} / ${t("wbModeTotal", lang)}`}
+          className="flex shrink-0 items-center gap-0.5 rounded-full border border-white/12 bg-white/5 p-0.5"
+        >
+          <ModeOption
+            testId="wb-mode-perday"
+            active={perDay}
+            label={t("wbModePerDay", lang)}
+            onClick={() => setMode("perDay")}
+          />
+          <ModeOption
+            testId="wb-mode-total"
+            active={!perDay}
+            label={t("wbModeTotal", lang)}
+            onClick={() => setMode("total")}
+          />
+        </div>
       </div>
 
-      {/* Headline figures */}
+      {/* Period. Operating days is its own tile below, so it is not repeated
+          here. */}
+      <span className="inline-block rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2 py-0.5 text-[length:calc(9px*var(--fs))] font-semibold uppercase tracking-wider text-emerald-200/90">
+        {shortDate(period.from)}–{shortDate(period.to)}
+      </span>
+
+      {/* Headline figures. Grease trap waste is broken out because it is a
+          stream of its own, not part of the municipal solid waste intake. */}
       <div className="grid grid-cols-2 gap-2">
         <Tile
-          label={t("weighbridgeTotal", lang)}
-          value={formatNumber(totals.tonnes)}
-          unit={t("tonnes", lang)}
+          label={t(perDay ? "wbMswPerDay" : "wbMswTotal", lang)}
+          value={formatNumber(scale(mswTonnes))}
+          unit={tonneUnit}
           accent="#34d399"
         />
         <Tile
-          label={t("weighbridgePerDay", lang)}
-          value={formatNumber(totals.tonnesPerDay)}
-          unit={`${t("tonnes", lang)}/d`}
-          accent="#34d399"
+          label={t(perDay ? "wbGtwPerDay" : "wbGtwTotal", lang)}
+          value={formatNumber(scale(gtwTonnes))}
+          unit={tonneUnit}
+          accent="#f59e0b"
         />
         <Tile
-          label={t("weighbridgeLoads", lang)}
-          value={formatNumber(totals.loads)}
+          label={t(perDay ? "weighbridgeLoadsPerDay" : "weighbridgeLoads", lang)}
+          value={formatNumber(scale(totals.loads))}
+          unit={perDay ? t("loadsPerDayUnit", lang) : undefined}
         />
         <Tile
           label={t("weighbridgeDays", lang)}
@@ -248,24 +376,13 @@ export default function WeighbridgeSection({
         />
       </div>
 
-      {/* Measured vs published. Two different kinds of figure sitting next to
-          each other, so say so explicitly rather than letting the reader
-          assume the EPD rate above is a cap this is breaching. */}
-      {delta !== null && (
-        <p className="text-[length:calc(10px*var(--fs))] leading-relaxed text-white/50">
-          {t("weighbridgeVsPublished", lang)
-            .replace("{measured}", formatNumber(totals.tonnesPerDay))
-            .replace("{published}", formatNumber(publishedTpd as number))
-            .replace("{delta}", `${delta > 0 ? "+" : ""}${delta}%`)}
-        </p>
-      )}
-
-      {/* Daily intake, stacked by delivery stream */}
+      {/* Daily intake, split by delivery stream. Unaffected by the switch —
+          this is the day-by-day series, not a total or an average. */}
       <div>
         <SectionHeading label={t("weighbridgeDaily", lang)} />
         <div className="rounded-xl border border-white/8 bg-white/[0.03] p-2 pt-3">
           <ResponsiveContainer width="100%" height={150}>
-            <BarChart data={daily} margin={{ top: 4, right: 6, left: -18, bottom: 0 }}>
+            <LineChart data={chartData} margin={{ top: 4, right: 8, left: -8, bottom: 0 }}>
               <CartesianGrid
                 strokeDasharray="3 3"
                 stroke="rgba(255,255,255,0.07)"
@@ -282,13 +399,13 @@ export default function WeighbridgeSection({
               <YAxis
                 tickLine={false}
                 axisLine={false}
-                width={44}
+                width={46}
                 domain={[0, "auto"]}
                 tick={{ fill: "rgba(255,255,255,0.45)", fontSize: 9 }}
                 tickFormatter={(v: number) => formatNumber(v)}
               />
               <Tooltip
-                cursor={{ fill: "rgba(255,255,255,0.06)" }}
+                cursor={{ stroke: "rgba(255,255,255,0.2)" }}
                 contentStyle={{
                   background: "rgba(15,23,42,0.96)",
                   border: "1px solid rgba(255,255,255,0.14)",
@@ -300,14 +417,41 @@ export default function WeighbridgeSection({
                 labelFormatter={(label) => String(label)}
                 formatter={(value: number, name: string) => [
                   `${formatNumber(value)} ${t("tonnes", lang)}`,
-                  t(name === "private" ? "streamPrivate" : name === "public" ? "streamPublic" : "streamGtw", lang),
+                  t(STREAM_LABEL_KEY[name as StreamKey] ?? "streamPrivate", lang),
                 ]}
               />
-              <Bar dataKey="private" stackId="intake" fill={STREAM_COLOR.private} />
-              <Bar dataKey="public" stackId="intake" fill={STREAM_COLOR.public} />
-              <Bar dataKey="gtw" stackId="intake" fill={STREAM_COLOR.gtw} />
-            </BarChart>
+              {STREAMS.map((key) => (
+                <Line
+                  key={key}
+                  type="monotone"
+                  dataKey={key}
+                  stroke={STREAM_COLOR[key]}
+                  strokeWidth={2}
+                  dot={false}
+                  activeDot={{ r: 3 }}
+                />
+              ))}
+            </LineChart>
           </ResponsiveContainer>
+
+          {/* Series legend + what the line is measuring */}
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 px-1">
+            {STREAMS.map((key) => (
+              <span
+                key={key}
+                className="flex items-center gap-1 text-[length:calc(9.5px*var(--fs))] text-white/50"
+              >
+                <span
+                  className="h-1.5 w-3 rounded-full"
+                  style={{ backgroundColor: STREAM_COLOR[key] }}
+                />
+                {t(STREAM_LABEL_KEY[key], lang)}
+              </span>
+            ))}
+          </div>
+          <p className="mt-1 px-1 text-[length:calc(9px*var(--fs))] leading-relaxed text-white/35">
+            {t("wbChartDailyCaption", lang)}
+          </p>
         </div>
       </div>
 
@@ -319,12 +463,14 @@ export default function WeighbridgeSection({
             <RankedBar
               key={s.key}
               label={pick(lang, s.labelEn, s.labelZh)}
-              tonnes={s.tonnes}
-              loads={s.loads}
+              value={scale(s.tonnes)}
+              unit={tonneUnit}
+              loads={scale(s.loads)}
+              loadsUnit={loadUnit}
               share={s.share}
+              barShare={s.share}
               color={STREAM_COLOR[s.key] ?? "#94a3b8"}
               highlight={s.key === "gtw"}
-              lang={lang}
             />
           ))}
         </div>
@@ -338,26 +484,29 @@ export default function WeighbridgeSection({
         )}
       </div>
 
-      {/* Waste type */}
+      {/* Waste type — grease trap waste is excluded: it is the GTW stream
+          reported above, and shares here are taken of MSW for that reason. */}
       <div>
         <SectionHeading label={t("weighbridgeWasteTypes", lang)} />
         <RankedList
-          items={wasteTypes}
+          items={wasteTypes.filter((w) => !w.gtw)}
           defaultCount={6}
-          total={total}
+          total={mswTonnes}
+          scaleToMax
           lang={lang}
           testId="wb-waste-types"
-          render={(w, share) => (
+          render={(w, share, barShare) => (
             <RankedBar
               key={w.code}
               label={pick(lang, w.nameEn, w.nameZh)}
               sub={w.code}
-              tonnes={w.tonnes}
-              loads={w.loads}
+              value={scale(w.tonnes)}
+              unit={tonneUnit}
+              loads={scale(w.loads)}
+              loadsUnit={loadUnit}
               share={share}
-              color={w.gtw ? STREAM_COLOR.gtw : "#94a3b8"}
-              highlight={w.gtw}
-              lang={lang}
+              barShare={barShare}
+              color="#94a3b8"
             />
           )}
         />
@@ -369,43 +518,26 @@ export default function WeighbridgeSection({
         <RankedList
           items={districts}
           defaultCount={6}
-          total={total}
+          total={totals.tonnes}
+          scaleToMax
           lang={lang}
           testId="wb-districts"
-          render={(d, share) => (
+          render={(d, share, barShare, rank) => (
             <RankedBar
               key={d.code}
               label={pick(lang, d.nameEn, d.nameZh)}
               sub={d.code}
-              tonnes={d.tonnes}
-              loads={d.loads}
+              value={scale(d.tonnes)}
+              unit={tonneUnit}
+              loads={scale(d.loads)}
+              loadsUnit={loadUnit}
               share={share}
-              color="#60a5fa"
-              lang={lang}
+              barShare={barShare}
+              color={DISTRICT_COLORS[rank % DISTRICT_COLORS.length]}
             />
           )}
         />
       </div>
-
-      {/* Station maintenance — reported, never counted as intake */}
-      {totals.maintenanceLoads > 0 && (
-        <div className="flex items-start gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-2">
-          <Truck className="mt-0.5 h-3 w-3 shrink-0 text-white/40" />
-          <p className="text-[length:calc(10px*var(--fs))] leading-relaxed text-white/50">
-            <span className="font-semibold text-white/70">
-              {t("weighbridgeMaintenance", lang)}:
-            </span>{" "}
-            {formatNumber(totals.maintenanceTonnes)} {t("tonnes", lang)} /{" "}
-            {formatNumber(totals.maintenanceLoads)} {t("loadsUnit", lang)}.{" "}
-            {t("weighbridgeMaintenanceNote", lang)}
-          </p>
-        </div>
-      )}
-
-      {/* Provenance */}
-      <p className="text-[length:calc(9.5px*var(--fs))] leading-relaxed text-white/35">
-        {t("weighbridgeSourceNote", lang)}
-      </p>
     </section>
   );
 }

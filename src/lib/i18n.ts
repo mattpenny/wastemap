@@ -134,7 +134,6 @@ const DICT = {
   otherFacilities: ["Other facilities", "其他設施"],
   epdFacilityPage: ["EPD facility page", "環保署設施頁面"],
   close: ["Close", "關閉"],
-  dataNote: ["Data note", "數據說明"],
   noFacilities: ["No facilities match this filter", "沒有符合篩選條件的設施"],
   language: ["Language", "語言"],
   mapStyle: ["Map style", "地圖樣式"],
@@ -144,24 +143,30 @@ const DICT = {
   // read as one.
   weighbridgeTitle: ["Weighbridge records", "地磅記錄"],
   weighbridgeSubtitle: ["Measured intake", "實測接收量"],
-  weighbridgeSourceNote: [
-    "Operator weighbridge records, not an EPD publication. Completed weigh-ins only; the station's own maintenance loads are excluded.",
-    "營運方地磅記錄，並非環保署公布數據。只計已完成過磅記錄，轉運站自身維護車載重不計入。",
-  ],
   weighbridgePeriod: ["Period", "期間"],
   weighbridgeDays: ["Operating days", "運作日數"],
   weighbridgeLoads: ["Weigh-ins", "過磅次數"],
-  weighbridgeTotal: ["Total received", "總接收量"],
-  weighbridgePerDay: ["Average per day", "每日平均"],
-  weighbridgeDaily: ["Daily intake", "每日接收量"],
+  weighbridgeLoadsPerDay: ["Weigh-ins per day", "每日過磅次數"],
+
+  // The Per day / Total switch rescales every figure in the block, so the tile
+  // labels change with it rather than reading "total" next to an average.
+  wbModePerDay: ["Per day", "每日"],
+  wbModeTotal: ["Total", "總計"],
+  wbMswTotal: ["Total received (MSW)", "總接收量（都市固體廢物）"],
+  wbGtwTotal: ["Total received (GTW)", "總接收量（隔油池廢物）"],
+  wbMswPerDay: ["MSW per day", "每日都市固體廢物"],
+  wbGtwPerDay: ["GTW per day", "每日隔油池廢物"],
+
+  // The daily chart is the one thing the Per day / Total switch leaves alone:
+  // it is a day-by-day series, not a total or an average.
+  weighbridgeDaily: ["Daily waste intake", "每日廢物接收量"],
+  wbChartDailyCaption: [
+    "Tonnes per day, by delivery stream.",
+    "每日接收量，按來源類別劃分。",
+  ],
   weighbridgeStreams: ["Who delivers it", "來源類別"],
   weighbridgeWasteTypes: ["Waste type", "廢物類別"],
   weighbridgeDistricts: ["Source district", "來源地區"],
-  weighbridgeMaintenance: ["Station maintenance", "站內維護"],
-  weighbridgeMaintenanceNote: [
-    "The station's own maintenance-vehicle loads. Reported for completeness, excluded from the intake figures above.",
-    "轉運站自身維護車的載重。為求完整而列出，但不計入上列接收數字。",
-  ],
   weighbridgeGtwNote: [
     "WKTS is the only transfer station that takes grease trap waste.",
     "西九龍轉運站是唯一接收隔油池廢物的轉運站。",
@@ -170,15 +175,20 @@ const DICT = {
     "Excluded: {n} cancelled or rejected weigh-ins.",
     "已剔除：{n} 筆取消或拒絕的過磅記錄。",
   ],
-  weighbridgeVsPublished: [
-    "Measured {measured} tonnes/day, against an EPD published rate of {published} ({delta}). These are different kinds of figure: one is what the station actually received, the other is the published rate.",
-    "地磅實測每日 {measured} 公噸，環保署公布處理量為 {published}（{delta}）。兩者性質不同：前者為實際接收量，後者為公布處理量。",
-  ],
   streamPrivate: ["Private vehicles", "私人車"],
   streamPublic: ["FEHD / public", "食環署"],
   streamGtw: ["Grease trap waste", "隔油池廢物"],
   tonnes: ["tonnes", "公噸"],
   loadsUnit: ["loads", "車次"],
+  loadsPerDayUnit: ["loads/d", "車次／日"],
+
+  // Shown when the default drawer view has nothing to draw: the EPD figures
+  // now live behind the Detail toggle, so without this the drawer body would
+  // be blank for the 18 facilities that publish no weighbridge records.
+  detailHint: [
+    "Published throughput, design capacity and facility details are behind Detail.",
+    "公布處理量、設計處理量及設施詳情收於「詳細資料」內。",
+  ],
 } as const;
 
 export type DictKey = keyof typeof DICT;

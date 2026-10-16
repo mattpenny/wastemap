@@ -10,6 +10,7 @@ import {
   Coins,
   ExternalLink,
   Factory,
+  Info,
   Layers,
   MapPin,
   Ruler,
@@ -112,6 +113,7 @@ export default function FacilityDetailDrawer({
 }: FacilityDetailDrawerProps) {
   /** The default drawer is just the headline figures; metadata sits behind this. */
   const [detailOpen, setDetailOpen] = React.useState(false);
+  const detailRef = React.useRef<HTMLDivElement | null>(null);
 
   React.useEffect(() => {
     if (!isOpen) return;
@@ -126,6 +128,22 @@ export default function FacilityDetailDrawer({
   React.useEffect(() => {
     setDetailOpen(false);
   }, [facility?.id]);
+
+  /**
+   * Bring the revealed detail into view.
+   *
+   * The drawer body scrolls, and on a station that reports weighbridge records
+   * the detail section sits well below the fold. Without this the toggle looked
+   * broken: the section did open, ~1,900px down the scroller, so nothing on
+   * screen changed.
+   */
+  React.useEffect(() => {
+    if (!detailOpen) return;
+    const id = window.requestAnimationFrame(() =>
+      detailRef.current?.scrollIntoView({ block: "start", behavior: "smooth" })
+    );
+    return () => window.cancelAnimationFrame(id);
+  }, [detailOpen]);
 
   if (!isOpen || !facility) return null;
 
@@ -226,66 +244,79 @@ export default function FacilityDetailDrawer({
         </header>
 
         <div className="thin-scrollbar flex-1 space-y-4 overflow-y-auto px-5 py-4">
-          {/* Official facility figures — the default view. */}
-          <section className="space-y-2">
-            <div className="grid grid-cols-2 gap-2">
-              <MetricTile
-                label={t("reportedThroughput", lang)}
-                value={throughputValue}
-                unit={facility.throughputTonnesPerDay === null ? undefined : t("tpd", lang)}
-                accent={facility.throughputTonnesPerDay === null ? "#94a3b8" : meta.hex}
-                note={
-                  facility.throughputNoteEn
-                    ? pick(lang, facility.throughputNoteEn, facility.throughputNoteZh ?? undefined)
-                    : t("notPublishedPerFacility", lang)
-                }
-              />
-              <MetricTile
-                label={capacityLabel}
-                value={capacityValue}
-                unit={capacityUnit}
-                accent={facility.designCapacityTonnesPerDay !== null ? meta.hex : undefined}
-                note={
-                  facility.voidCapacityMillionM3 !== null
-                    ? t("voidNotThroughput", lang)
-                    : facility.designCapacityTonnesPerDay !== null
-                      ? t("designCapacityNote", lang)
-                      : t("notPublished", lang)
-                }
-              />
-            </div>
-
-            {facility.groupThroughputTonnesPerDay !== undefined && (
-              <div className="flex items-start gap-2 rounded-xl border border-amber-400/15 bg-amber-400/[0.06] px-3 py-2.5">
-                <Layers className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-300/80" />
-                <p className="text-[length:calc(10.5px*var(--fs))] leading-relaxed text-amber-100/75">
-                  {pick(
-                    lang,
-                    facility.groupThroughputNoteEn,
-                    facility.groupThroughputNoteZh
-                  )}
-                </p>
-              </div>
-            )}
-          </section>
-
           {/* Measured intake from the station's own weighbridge. A different
-              source from the EPD figures above — real per-weigh-in records,
-              not a published rate — so it is a separate, clearly labelled
-              block rather than another tile in the grid. */}
+              source from the EPD facility record — real per-weigh-in records,
+              not a published rate — so it is its own block, never a tile
+              alongside the published figures. */}
           {weighbridge && (
             <div data-testid="weighbridge-section">
-              <WeighbridgeSection
-                records={weighbridge}
-                lang={lang}
-                publishedTpd={facility.throughputTonnesPerDay}
-              />
+              <WeighbridgeSection records={weighbridge} lang={lang} />
             </div>
+          )}
+
+          {/* The published figures live behind the Detail toggle, so a facility
+              with no weighbridge records would otherwise open on an empty
+              drawer. Point at the toggle instead of leaving it blank. */}
+          {!weighbridge && !detailOpen && (
+            <button
+              data-testid="detail-hint"
+              onClick={() => setDetailOpen(true)}
+              className="flex w-full items-center gap-2.5 rounded-xl border border-white/8 bg-white/[0.03] px-3.5 py-3 text-left transition-colors hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60"
+            >
+              <Info className="h-3.5 w-3.5 shrink-0 text-white/40" />
+              <span className="min-w-0 flex-1 text-[length:calc(10.5px*var(--fs))] leading-relaxed text-white/50">
+                {t("detailHint", lang)}
+              </span>
+              <ChevronDown className="h-3.5 w-3.5 shrink-0 text-white/35" />
+            </button>
           )}
 
           {/* Everything else is one tap away behind the Detail toggle. */}
           {detailOpen && (
-            <>
+            <div ref={detailRef} className="space-y-4">
+              {/* Official EPD figures. */}
+              <section className="space-y-2">
+                <div className="grid grid-cols-2 gap-2">
+                  <MetricTile
+                    label={t("reportedThroughput", lang)}
+                    value={throughputValue}
+                    unit={facility.throughputTonnesPerDay === null ? undefined : t("tpd", lang)}
+                    accent={facility.throughputTonnesPerDay === null ? "#94a3b8" : meta.hex}
+                    note={
+                      facility.throughputNoteEn
+                        ? pick(lang, facility.throughputNoteEn, facility.throughputNoteZh ?? undefined)
+                        : t("notPublishedPerFacility", lang)
+                    }
+                  />
+                  <MetricTile
+                    label={capacityLabel}
+                    value={capacityValue}
+                    unit={capacityUnit}
+                    accent={facility.designCapacityTonnesPerDay !== null ? meta.hex : undefined}
+                    note={
+                      facility.voidCapacityMillionM3 !== null
+                        ? t("voidNotThroughput", lang)
+                        : facility.designCapacityTonnesPerDay !== null
+                          ? t("designCapacityNote", lang)
+                          : t("notPublished", lang)
+                    }
+                  />
+                </div>
+
+                {facility.groupThroughputTonnesPerDay !== undefined && (
+                  <div className="flex items-start gap-2 rounded-xl border border-amber-400/15 bg-amber-400/[0.06] px-3 py-2.5">
+                    <Layers className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-300/80" />
+                    <p className="text-[length:calc(10.5px*var(--fs))] leading-relaxed text-amber-100/75">
+                      {pick(
+                        lang,
+                        facility.groupThroughputNoteEn,
+                        facility.groupThroughputNoteZh
+                      )}
+                    </p>
+                  </div>
+                )}
+              </section>
+
               <section className="space-y-3 rounded-xl border border-white/8 bg-white/[0.03] px-3.5 py-3.5">
                 {facility.groupEn && (
                   <MetaRow
@@ -356,13 +387,8 @@ export default function FacilityDetailDrawer({
                   {t("epdFacilityPage", lang)}
                 </a>
               )}
-            </>
+            </div>
           )}
-
-          {/* Provenance */}
-          <p className="pb-1 text-[length:calc(10px*var(--fs))] leading-relaxed text-white/30">
-            {t("dataNote", lang)}: {t("infoDataNote", lang)}
-          </p>
         </div>
       </aside>
     </>
