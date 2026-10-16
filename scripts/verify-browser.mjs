@@ -30,6 +30,17 @@ page.on("console", (msg) => {
   if (msg.type() === "error") errors.push(`console: ${msg.text()}`);
 });
 
+// Which zoom levels of Esri imagery the opening view pulls. The satellite
+// source declares a 128px tileSize precisely so the map asks for one level
+// deeper than the camera: Esri's Hong Kong mosaic is a coarse, mushy layer at
+// z11-z12 and real aerial photography from z13. Without this the basemap
+// silently goes back to looking blurry.
+const imageryZooms = new Set();
+page.on("request", (req) => {
+  const m = /World_Imagery\/MapServer\/tile\/(\d+)\//.exec(req.url());
+  if (m) imageryZooms.add(Number(m[1]));
+});
+
 const BASE = process.env.BASE ?? "http://localhost:3000";
 
 await page.goto(BASE, { waitUntil: "domcontentloaded", timeout: 60000 });
@@ -133,6 +144,8 @@ check("desktop: phone header disclosures are not rendered",
 check("header stats show RTS-only subset (13 facilities)", /(^|\s)13(\s|$)/.test(bodyText) &&
   /facilit/i.test(bodyText), bodyText.match(/FACILITIES[^\n]*\n?[^\n]*/)?.[0] ?? "");
 check("header stats show 6/13 published", bodyText.includes("6/13"));
+check("opening view pulls imagery at z13 or deeper (not Esri's coarse z11-12 mosaic)",
+  Math.max(...imageryZooms) >= 13, `zooms=${JSON.stringify([...imageryZooms].sort())}`);
 await page.screenshot({ path: path.join(OUT_DIR, "opening-state-collapsed.png") });
 
 // =====================================================================

@@ -103,7 +103,27 @@ export function satelliteStyle(): StyleSpecification {
         tiles: [
           "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
         ],
-        tileSize: 256,
+        /**
+         * Declared 128, though the service serves 256px images.
+         *
+         * Esri's World Imagery mosaic over Hong Kong is two different datasets:
+         * z11-z12 are a coarse, visibly mushy layer (a 12KB tile for the whole
+         * harbour), while z13 and deeper are genuine high-resolution aerial
+         * photography (the same area is crisp — individual buildings, piers and
+         * boats). The opening view sits right on that boundary and used to pull
+         * z11/z12, which is why the map read as blurry.
+         *
+         * MapLibre picks the tile zoom from the declared `tileSize`, so halving
+         * it makes the map ask for one level deeper — z13/z14 at the same
+         * camera — and draw each 256px image into half the screen area. The
+         * result is a 2x supersampled basemap: measurably sharper, at ~3x the
+         * tile requests (1.7 MB → 5.5 MB for the opening view, then cached).
+         * That trade is worth it here; the imagery is the whole point of the
+         * satellite style.
+         *
+         * Only the imagery is nudged — the label layer stays on its own zoom.
+         */
+        tileSize: 128,
         maxzoom: 19,
         attribution: ESRI_ATTRIBUTION,
       },
@@ -136,15 +156,17 @@ export function satelliteStyle(): StyleSpecification {
            *   z11  mean luminance 54.8, 18.6% near-black pixels
            *   z12  mean luminance 68-85, 0.1-0.9% near-black pixels
            *
-           * The default view renders z11 tiles, so those near-black patches read
-           * as large "shadows" across the map with tile-aligned edges. Raising
-           * the black point and easing contrast removes them at every zoom
-           * without washing the imagery out.
+           * Those near-black patches read as large "shadows" with tile-aligned
+           * edges, so the black point is raised and contrast eased to remove
+           * them. It has to fade out by z12.5, though: lifting the black point
+           * and flattening contrast on good imagery is exactly what makes it
+           * look washed out and soft, and every zoom the app now opens at is
+           * past that point. Keyed on camera zoom, not tile zoom.
            */
-          "raster-brightness-min": 0.16,
+          "raster-brightness-min": ["interpolate", ["linear"], ["zoom"], 10, 0.16, 12.5, 0],
           "raster-brightness-max": 1,
-          "raster-contrast": -0.15,
-          "raster-saturation": 0.05,
+          "raster-contrast": ["interpolate", ["linear"], ["zoom"], 10, -0.15, 12.5, 0],
+          "raster-saturation": ["interpolate", ["linear"], ["zoom"], 10, 0.05, 12.5, 0],
         },
       },
       {
