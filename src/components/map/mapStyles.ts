@@ -26,8 +26,20 @@ import type { StyleSpecification } from "maplibre-gl";
 
 export type MapStyleId = "official" | "satellite" | "aerial";
 
-/** Satellite is the default view. */
-export const DEFAULT_MAP_STYLE: MapStyleId = "satellite";
+/**
+ * The Lands Department's own aerial photography is the default.
+ *
+ * Esri's World Imagery over Hong Kong is a multi-date mosaic: it carries
+ * visible cloud shadows (measured over the sea south-west of Lamma, Esri reads
+ * ~31 luminance where the Lands Department's survey reads ~78 across the same
+ * tiles) and hard tile seams, and the water gets darker again at z14, which is
+ * what made the map look like it was flashing when a camera move crossed a tile
+ * level. LandsD is one agency's survey, so it is consistent and shadow-free.
+ * It costs more — PNG only, ~161 KB a tile — but with the opening view pulling
+ * a single tile level the load is comparable, and the imagery is the point of
+ * the satellite view. Esri stays available as the lighter "Satellite" option.
+ */
+export const DEFAULT_MAP_STYLE: MapStyleId = "aerial";
 
 export type MapLang = "en" | "zh";
 
@@ -227,7 +239,9 @@ export function aerialStyle(): StyleSpecification {
         id: "aerial",
         type: "raster",
         source: "imagery",
-        paint: { "raster-fade-duration": 0 },
+        // A short fade rather than none: a camera move crosses tile levels, and
+        // an instant swap is what made the map look like it was flashing.
+        paint: { "raster-fade-duration": 250 },
       },
       {
         id: "places",
