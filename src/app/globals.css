@@ -1,0 +1,203 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* MapLibre GL — required for the 3D map canvas, controls and popups. */
+@import "maplibre-gl/dist/maplibre-gl.css";
+
+@layer base {
+  :root {
+    /**
+     * UI font scale, driven by the A− / A+ control in the toolbar.
+     *
+     * Every text size in the chrome is written as
+     * `text-[length:calc(Npx*var(--fs))]`, so this multiplies font sizes ONLY —
+     * padding, gaps and panel dimensions stay fixed and the layout keeps its
+     * proportions at every setting. Defaults above 1 because the original sizes
+     * were too small to read comfortably.
+     */
+    --fs: 1.2;
+    --background: 0 0% 100%;
+    --foreground: 222.2 84% 4.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
+    --primary: 152 100% 33%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 210 40% 96%;
+    --secondary-foreground: 222.2 84% 4.9%;
+    --muted: 210 40% 96%;
+    --muted-foreground: 215.4 16.3% 46.8%;
+    --accent: 210 40% 96%;
+    --accent-foreground: 222.2 84% 4.9%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: 152 100% 33%;
+    --radius: 0.75rem;
+  }
+
+  .dark {
+    --background: 222.2 84% 4.9%;
+    --foreground: 210 40% 98%;
+    --card: 222.2 84% 8%;
+    --card-foreground: 210 40% 98%;
+    --popover: 222.2 84% 8%;
+    --popover-foreground: 210 40% 98%;
+    --primary: 152 76% 44%;
+    --primary-foreground: 222.2 84% 4.9%;
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+    --accent: 217.2 32.6% 17.5%;
+    --accent-foreground: 210 40% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+    --ring: 152 76% 44%;
+  }
+}
+
+@layer base {
+  * {
+    border-color: hsl(var(--border));
+  }
+  html,
+  body {
+    height: 100%;
+  }
+  body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    -webkit-font-smoothing: antialiased;
+    overscroll-behavior: none;
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * MapLibre chrome — restyle the default controls for the dark overlay
+ * ------------------------------------------------------------------ */
+.maplibregl-ctrl-group {
+  background: rgba(15, 23, 42, 0.82) !important;
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 0.75rem !important;
+  overflow: hidden;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45) !important;
+}
+
+.maplibregl-ctrl-group button {
+  width: 34px !important;
+  height: 34px !important;
+  background: transparent !important;
+}
+
+.maplibregl-ctrl-group button + button {
+  border-top: 1px solid rgba(255, 255, 255, 0.1) !important;
+}
+
+.maplibregl-ctrl-group button .maplibregl-ctrl-icon {
+  filter: invert(1) brightness(1.6);
+}
+
+.maplibregl-ctrl-group button:hover {
+  background: rgba(255, 255, 255, 0.1) !important;
+}
+
+.maplibregl-ctrl-attrib {
+  background: rgba(15, 23, 42, 0.7) !important;
+  border-radius: 6px 0 0 0;
+}
+
+.maplibregl-ctrl-attrib a {
+  color: rgba(255, 255, 255, 0.65) !important;
+  font-size: 10px;
+}
+
+.maplibregl-ctrl-attrib-button {
+  filter: invert(1) brightness(1.5);
+}
+
+/* Keep the zoom/compass (and the GPS button under it) clear of the single-row
+   toggle bar pinned to the top-right. The inner control's own top margin is
+   zeroed so the group's top edge sits exactly at this offset — that is what
+   lets the intake card, which uses the same value, line up with it. */
+.maplibregl-ctrl-top-right {
+  margin-top: 4rem;
+}
+
+.maplibregl-ctrl-top-right .maplibregl-ctrl {
+  margin: 0 10px 0 0 !important;
+}
+
+@media (max-width: 767px) {
+  .maplibregl-ctrl-top-right {
+    margin-top: 12rem;
+  }
+}
+
+/* Attribution is rendered by the app's own "i" popover rather than MapLibre's
+   control, so the built-in container is hidden if it ever gets added back. */
+.maplibregl-ctrl-bottom-left {
+  display: none;
+}
+
+/* deck.gl renders its own canvas over the map; we draw our own tooltip, so the
+   canvas itself must stay click-through. */
+#deckgl-overlay {
+  pointer-events: none;
+}
+
+/* ------------------------------------------------------------------ *
+ * Utilities
+ * ------------------------------------------------------------------ */
+@layer utilities {
+  .glass {
+    background: rgba(15, 23, 42, 0.78);
+    backdrop-filter: blur(16px) saturate(150%);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+  }
+
+  .glass-light {
+    background: rgba(255, 255, 255, 0.9);
+    backdrop-filter: blur(16px) saturate(150%);
+    border: 1px solid rgba(15, 23, 42, 0.08);
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .thin-scrollbar::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  .thin-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .thin-scrollbar::-webkit-scrollbar-thumb {
+    background: rgba(100, 116, 139, 0.45);
+    border-radius: 999px;
+  }
+  .thin-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: rgba(100, 116, 139, 0.7);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
