@@ -12,7 +12,6 @@ import {
   RotateCcw,
   Satellite,
   SlidersHorizontal,
-  TrendingUp,
 } from "lucide-react";
 
 import WasteMap3D, {
@@ -22,13 +21,12 @@ import type { MapStyleId } from "@/components/map/mapStyles";
 import { DEFAULT_MAP_STYLE } from "@/components/map/mapStyles";
 import FacilityDetailDrawer from "@/components/ui/FacilityDetailDrawer";
 import ShortName from "@/components/ui/ShortName";
-import TerritoryTrendCard from "@/components/ui/TerritoryTrendCard";
 import MapInfoButton from "@/components/ui/MapInfoButton";
 import type {
   FacilityCategory,
   FacilityProperties,
 } from "@/data/waste-facilities";
-import { CATEGORY_META, CATEGORY_ORDER, facilityColorMap } from "@/lib/categories";
+import { CATEGORY_META, CATEGORY_ORDER, OITF_GROUP_HEX, facilityColorMap } from "@/lib/categories";
 import { t, type Lang } from "@/lib/i18n";
 import type {
   WeighbridgeDataset,
@@ -257,7 +255,6 @@ export default function HomePage() {
   /** Every panel starts collapsed; the map is the opening view. */
   const [legendOpen, setLegendOpen] = useState(false);
   const [listOpen, setListOpen] = useState(false);
-  const [trendOpen, setTrendOpen] = useState(false);
   /**
    * Phone header, both collapsed by default so the opening view is the title
    * and nothing else. `headerDetailOpen` reveals the facility counts inside the
@@ -473,21 +470,19 @@ export default function HomePage() {
    * active layout.
    */
   const toggleDockPanel = useCallback(
-    (which: "list" | "legend" | "trend") => {
+    (which: "list" | "legend") => {
       const accordion =
         typeof window !== "undefined" &&
         window.matchMedia("(max-width: 1023px)").matches;
 
-      const current =
-        which === "list" ? listOpen : which === "legend" ? legendOpen : trendOpen;
+      const current = which === "list" ? listOpen : legendOpen;
       const next = !current;
       const closeOthers = accordion && next;
 
       setListOpen(which === "list" ? next : closeOthers ? false : listOpen);
       setLegendOpen(which === "legend" ? next : closeOthers ? false : legendOpen);
-      setTrendOpen(which === "trend" ? next : closeOthers ? false : trendOpen);
     },
-    [listOpen, legendOpen, trendOpen]
+    [listOpen, legendOpen]
   );
 
   /**
@@ -504,7 +499,6 @@ export default function HomePage() {
     if (!window.matchMedia("(max-width: 1023px)").matches) return;
     setListOpen(false);
     setLegendOpen(false);
-    setTrendOpen(false);
   }, []);
 
   const toggleCategory = useCallback((category: FacilityCategory) => {
@@ -958,13 +952,13 @@ export default function HomePage() {
                                 isExpanded ? "collapseGroup" : "expandGroup",
                                 lang
                               )}
-                              className="group/row w-full rounded-xl px-2.5 py-2 text-left transition-colors hover:bg-white/[0.07] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60"
+                              className="group/row relative w-full rounded-xl px-2.5 py-2 text-left transition-colors hover:bg-white/[0.07] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60"
                             >
                               <div className="flex items-center justify-between gap-2">
                                 <span className="flex min-w-0 items-center gap-1.5">
                                   <span
                                     className="h-1.5 w-1.5 shrink-0 rounded-full"
-                                    style={{ backgroundColor: meta.hex }}
+                                    style={{ backgroundColor: OITF_GROUP_HEX }}
                                   />
                                   <ShortName
                                     className="text-[length:calc(11.5px*var(--fs))] font-medium text-white/85"
@@ -1024,7 +1018,7 @@ export default function HomePage() {
                                       <button
                                         onClick={() => selectFromList(child)}
                                         className={cn(
-                                          "group/row flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60",
+                                          "group/row relative flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60",
                                           isActive
                                             ? "bg-white/12"
                                             : "hover:bg-white/[0.07]"
@@ -1182,44 +1176,20 @@ export default function HomePage() {
             </div>
           </div>
 
-          {/* Hong Kong-wide annual trend — a panel in its own right, deliberately
-              NOT a section of the facility drawer: EPD publishes no per-facility
-              time series, and territory totals inside a facility card read as if
-              that facility receives that waste mix. Hidden while the drawer is
-              open so the two never overlap. A sheet above the dock on phones;
-              its own bottom-right card from lg up. */}
-          {!drawerOpen && (
-            <div
-              data-testid="trend-sheet"
-              className={cn(
-                "pointer-events-auto w-full",
-                trendOpen ? "block" : "hidden",
-                "lg:absolute lg:bottom-3 lg:right-3 lg:block lg:w-auto"
-              )}
-            >
-              <TerritoryTrendCard
-                lang={lang}
-                isOpen={trendOpen}
-                onToggle={() => setTrendOpen((v) => !v)}
-                // The chart is taller than the other two sheets, so the phone
-                // sheet scrolls rather than clipping the legend under the plot.
-                className={cn(
-                  "w-full lg:w-72",
-                  trendOpen &&
-                    "max-h-[52vh] overflow-y-auto rounded-t-2xl lg:max-h-none lg:overflow-hidden lg:rounded-2xl"
-                )}
-              />
-            </div>
-          )}
+          {/* The Hong Kong-wide annual trend panel was removed at the user's
+              request. EPD publishes no per-facility time series, and the
+              territory-wide series it does publish is not what this app is
+              about; the data file stays (src/data/hk-waste-trend.ts) if it is
+              ever wanted back. */}
 
-          {/* Dock — phones only. Three short tabs plus the map "i" button.
+          {/* Dock — phones only. Two short tabs plus the map "i" button.
               `lg:contents` dissolves this wrapper on desktop, which drops the
               info button back into the bottom-left corner (it carries
               `lg:absolute` of its own) and leaves the cards to their own
               corners. */}
           <div
             data-testid="bottom-dock"
-            className="pointer-events-auto flex items-stretch gap-1 border-t border-white/10 bg-slate-900/90 px-2 pb-2 pt-1.5 backdrop-blur-xl lg:contents"
+            className="pointer-events-auto relative flex items-stretch gap-1 border-t border-white/10 bg-slate-900/90 px-2 pb-2 pt-1.5 backdrop-blur-xl lg:contents"
           >
             <DockTab
               name="list"
@@ -1235,24 +1205,15 @@ export default function HomePage() {
               icon={<ListFilter className="h-4 w-4" />}
               label={t("dockLegend", lang)}
             />
-            {!drawerOpen && (
-              <DockTab
-                name="trend"
-                active={trendOpen}
-                onClick={() => toggleDockPanel("trend")}
-                icon={<TrendingUp className="h-4 w-4" />}
-                label={t("dockTrend", lang)}
-              />
-            )}
 
             {/* Map "i" — holds the imagery credit and the tech explanation that
-                used to sit permanently on screen. Sits at the right end of the
-                dock on phones (spaced by the dock's own `gap-1`), and back in
-                the bottom-left corner from lg up. */}
+                used to sit permanently on screen. Centred in the dock on phones
+                (absolutely placed against the dock, which is `relative`), and
+                back in the bottom-left corner from lg up. */}
             <MapInfoButton
               lang={lang}
               mapStyle={mapStyle}
-              className="shrink-0 lg:absolute lg:bottom-3 lg:left-3 lg:z-30"
+              className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 lg:absolute lg:bottom-3 lg:left-3 lg:top-auto lg:translate-x-0 lg:translate-y-0 lg:z-30"
             />
           </div>
           </div>

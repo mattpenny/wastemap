@@ -241,16 +241,18 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
     const selected = shown.find((f) => f.id === selectedId) ?? null;
 
     // The selected facility is drawn as a map pin rather than a pillar, so it
-    // is removed from the column data entirely.
-    const columnData = selectedId
+    // is removed from the column data entirely — and from the ground disc too,
+    // so the pin is the only mark left on it.
+    const selectedOut = selectedId
       ? shown.filter((f) => f.id !== selectedId)
       : shown;
+    const columnData = selectedOut;
 
     // Glowing ground disc under every pillar — anchors the columns visually
     // and gives a reliable click target at shallow pitch angles.
     const baseLayer = new ScatterplotLayer<FacilityProperties>({
       id: "facility-base",
-      data: shown,
+      data: selectedOut,
       pickable: true,
       stroked: true,
       filled: true,
@@ -331,7 +333,12 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
       container: containerRef.current,
       style: styleFor(mapStyle, lang),
       center: HK_CENTER,
-      zoom: isSmallScreen() ? 9.6 : HK_ZOOM,
+      // Start at the zoom the framing will settle on. Creating the map at
+      // HK_ZOOM (10.6) meant the first thing it did was request a whole level
+      // of tiles at z11, throw them away, and ask for z12 — a few hundred
+      // wasted requests on every load, and a visible tile-level swap when the
+      // framing jumped.
+      zoom: isSmallScreen() ? 11.4 : OVERVIEW_ZOOM,
       pitch: isSmallScreen() ? 40 : HK_PITCH,
       bearing: HK_BEARING,
       maxPitch: 75,

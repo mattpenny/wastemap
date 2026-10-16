@@ -82,20 +82,32 @@ export const CATEGORY_ORDER: FacilityCategory[] = [
  * Hue band per category, in degrees.
  *
  * Every facility gets its own colour so no two sites share a marker, but each
- * stays inside its category's band — the three landfills run red through
- * orange, the transfer stations run cyan through blue to indigo, and the parks
- * keep the single hues that already told them apart. That keeps the legend
+ * stays inside its category's band — the three landfills run magenta through
+ * plum, the thirteen transfer stations run teal through blue to indigo, and the
+ * parks keep the single hues that already told them apart. That keeps the legend
  * honest ("the colour family is the facility type") while making the sites
- * themselves distinguishable, which one flat colour per category could not do
- * for thirteen transfer stations.
+ * themselves distinguishable, which one flat colour per category could not do.
+ *
+ * Red is deliberately avoided for both landfills and transfer stations, at the
+ * user's request, which is why the landfill band sits opposite them in the
+ * wheel rather than below them.
  */
 const CATEGORY_HUE_BAND: Record<FacilityCategory, [number, number]> = {
-  Landfill: [2, 34],
+  Landfill: [292, 322],
   RTS: [180, 258],
   "I-PARK": [160, 170],
   "O-PARK": [36, 44],
   "Y-PARK": [266, 276],
 };
+
+/**
+ * Colour for the collapsed OITF group row in the ranking card.
+ *
+ * It stands for seven facilities, not one, so it gets a colour no facility is
+ * assigned — neutral slate. The six standalone stations beside it still each
+ * carry their own shade, which is what makes the seven rows distinguishable.
+ */
+export const OITF_GROUP_HEX = "#94a3b8";
 
 function hslToRgb(h: number, s: number, l: number): [number, number, number] {
   const a = s * Math.min(l, 1 - l);
