@@ -52,7 +52,9 @@ export default function MapInfoButton({
   const attribution =
     mapStyle === "satellite"
       ? t("infoAttributionSatellite", lang)
-      : t("infoAttributionOfficial", lang);
+      : mapStyle === "aerial"
+        ? t("infoAttributionAerial", lang)
+        : t("infoAttributionOfficial", lang);
 
   return (
     <div ref={containerRef} data-testid="map-info" className={cn("relative", className)}>

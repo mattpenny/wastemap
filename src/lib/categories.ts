@@ -75,3 +75,83 @@ export const CATEGORY_ORDER: FacilityCategory[] = [
   "Y-PARK",
 ];
 
+// ---------------------------------------------------------------------------
+// Per-facility colour
+// ---------------------------------------------------------------------------
+/**
+ * Hue band per category, in degrees.
+ *
+ * Every facility gets its own colour so no two sites share a marker, but each
+ * stays inside its category's band — the three landfills run red through
+ * orange, the transfer stations run cyan through blue to indigo, and the parks
+ * keep the single hues that already told them apart. That keeps the legend
+ * honest ("the colour family is the facility type") while making the sites
+ * themselves distinguishable, which one flat colour per category could not do
+ * for thirteen transfer stations.
+ */
+const CATEGORY_HUE_BAND: Record<FacilityCategory, [number, number]> = {
+  Landfill: [2, 34],
+  RTS: [180, 258],
+  "I-PARK": [160, 170],
+  "O-PARK": [36, 44],
+  "Y-PARK": [266, 276],
+};
+
+function hslToRgb(h: number, s: number, l: number): [number, number, number] {
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) => {
+    const k = (n + h / 30) % 12;
+    return Math.round(255 * (l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1))));
+  };
+  return [f(0), f(8), f(4)];
+}
+
+const hexOf = ([r, g, b]: [number, number, number]) =>
+  `#${[r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+
+export interface FacilityColor {
+  hex: string;
+  rgb: [number, number, number];
+}
+
+/**
+ * Colour per facility id, derived from the order of the facility register.
+ *
+ * Keyed off the full list rather than whatever is on screen, so a site keeps
+ * its colour when the category filter changes. Memoised on the array identity,
+ * which is stable for the life of a page load.
+ */
+const colorCache = new WeakMap<readonly { id: string; category: FacilityCategory }[], Map<string, FacilityColor>>();
+
+export function facilityColorMap(
+  facilities: readonly { id: string; category: FacilityCategory }[]
+): Map<string, FacilityColor> {
+  const cached = colorCache.get(facilities);
+  if (cached) return cached;
+
+  const byCategory = new Map<FacilityCategory, string[]>();
+  for (const facility of facilities) {
+    const ids = byCategory.get(facility.category) ?? [];
+    ids.push(facility.id);
+    byCategory.set(facility.category, ids);
+  }
+
+  const colors = new Map<string, FacilityColor>();
+  for (const [category, ids] of byCategory) {
+    const [from, to] = CATEGORY_HUE_BAND[category];
+    ids.forEach((id, i) => {
+      const t = ids.length === 1 ? 0.5 : i / (ids.length - 1);
+      const hue = from + (to - from) * t;
+      // Alternate the lightness as well as the hue: thirteen transfer stations
+      // spread over 78° leaves only ~6° a step, which neighbouring rows could
+      // not tell apart on hue alone.
+      const lightness = i % 2 === 0 ? 0.5 : 0.62;
+      const rgb = hslToRgb(hue, 0.72, lightness);
+      colors.set(id, { hex: hexOf(rgb), rgb });
+    });
+  }
+
+  colorCache.set(facilities, colors);
+  return colors;
+}
+
