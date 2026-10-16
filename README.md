@@ -7,6 +7,10 @@ data.gov.hk.
 Facilities are drawn as extruded pillars: **colour encodes the facility type**
 and **height encodes published throughput**. Bilingual (English / 中文).
 
+**Live:** <https://hkwastemap.vercel.app>
+
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fmattpenny%2Fwastemap)
+
 ![The map, showing the 13 refuse transfer stations with every panel collapsed](docs/screenshot-map.jpg)
 
 ## What it shows
