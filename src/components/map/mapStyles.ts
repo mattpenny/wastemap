@@ -27,19 +27,18 @@ import type { StyleSpecification } from "maplibre-gl";
 export type MapStyleId = "official" | "satellite" | "aerial";
 
 /**
- * The Lands Department's own aerial photography is the default.
+/**
+ * Esri is the default, with the tile-zoom nudge below.
  *
- * Esri's World Imagery over Hong Kong is a multi-date mosaic: it carries
- * visible cloud shadows (measured over the sea south-west of Lamma, Esri reads
- * ~31 luminance where the Lands Department's survey reads ~78 across the same
- * tiles) and hard tile seams, and the water gets darker again at z14, which is
- * what made the map look like it was flashing when a camera move crossed a tile
- * level. LandsD is one agency's survey, so it is consistent and shadow-free.
- * It costs more — PNG only, ~161 KB a tile — but with the opening view pulling
- * a single tile level the load is comparable, and the imagery is the point of
- * the satellite view. Esri stays available as the lighter "Satellite" option.
+ * The Lands Department layer is the better imagery — official, and one agency's
+ * survey, so no cloud shadows or mosaic seams — but it is served as PNG at
+ * ~161 KB a tile. Measured on a facility switch, the map sat on bare background
+ * for over a second waiting for the new level, which is exactly the "flashing
+ * black page" complaint. Esri's tiles are ~10 KB, so the same move keeps the
+ * previous level on screen until the next one lands. "Aerial" stays available
+ * for when the cleaner imagery matters more than the wait.
  */
-export const DEFAULT_MAP_STYLE: MapStyleId = "aerial";
+export const DEFAULT_MAP_STYLE: MapStyleId = "satellite";
 
 export type MapLang = "en" | "zh";
 
@@ -115,7 +114,27 @@ export function satelliteStyle(): StyleSpecification {
         tiles: [
           "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
         ],
-        tileSize: 256,
+        /**
+         * Declared 128, though the service serves 256px images.
+         *
+         * Esri's World Imagery mosaic over Hong Kong is two different datasets:
+         * z11-z12 are a coarse, visibly mushy layer (a 12KB tile for the whole
+         * harbour), while z13 and deeper are genuine high-resolution aerial
+         * photography (the same area is crisp — individual buildings, piers and
+         * boats). The opening view sits right on that boundary and used to pull
+         * z11/z12, which is why the map read as blurry.
+         *
+         * MapLibre picks the tile zoom from the declared `tileSize`, so halving
+         * it makes the map ask for one level deeper — z13/z14 at the same
+         * camera — and draw each 256px image into half the screen area. The
+         * result is a 2x supersampled basemap: measurably sharper, at ~3x the
+         * tile requests (1.7 MB → 5.5 MB for the opening view, then cached).
+         * That trade is worth it here; the imagery is the whole point of the
+         * satellite style.
+         *
+         * Only the imagery is nudged — the label layer stays on its own zoom.
+         */
+        tileSize: 128,
         maxzoom: 19,
         attribution: ESRI_ATTRIBUTION,
       },
@@ -132,7 +151,13 @@ export function satelliteStyle(): StyleSpecification {
       {
         id: "background",
         type: "background",
-        paint: { "background-color": "#0b1220" },
+        // Dark slate rather than near-black. The background is what shows
+        // through for the few hundred milliseconds a camera move leaves a tile
+        // unsupplied, and at #0b1220 that read as a black flash — its luminance
+        // is ~17.5, and a frame captured mid-switch measured 18.5. #1e293b is
+        // ~44: still dark enough to sit behind the imagery, but a tile miss
+        // reads as "loading" instead of "broken".
+        paint: { "background-color": "#1e293b" },
       },
       {
         id: "satellite",
@@ -148,15 +173,17 @@ export function satelliteStyle(): StyleSpecification {
            *   z11  mean luminance 54.8, 18.6% near-black pixels
            *   z12  mean luminance 68-85, 0.1-0.9% near-black pixels
            *
-           * The default view renders z11 tiles, so those near-black patches read
-           * as large "shadows" across the map with tile-aligned edges. Raising
-           * the black point and easing contrast removes them at every zoom
-           * without washing the imagery out.
+           * Those near-black patches read as large "shadows" with tile-aligned
+           * edges, so the black point is raised and contrast eased to remove
+           * them. It has to fade out by z12.5, though: lifting the black point
+           * and flattening contrast on good imagery is exactly what makes it
+           * look washed out and soft, and every zoom the app now opens at is
+           * past that point. Keyed on camera zoom, not tile zoom.
            */
-          "raster-brightness-min": 0.16,
+          "raster-brightness-min": ["interpolate", ["linear"], ["zoom"], 10, 0.16, 12.5, 0],
           "raster-brightness-max": 1,
-          "raster-contrast": -0.15,
-          "raster-saturation": 0.05,
+          "raster-contrast": ["interpolate", ["linear"], ["zoom"], 10, -0.15, 12.5, 0],
+          "raster-saturation": ["interpolate", ["linear"], ["zoom"], 10, 0.05, 12.5, 0],
         },
       },
       {
@@ -211,15 +238,25 @@ export function aerialStyle(): StyleSpecification {
       {
         id: "background",
         type: "background",
-        paint: { "background-color": "#0b1220" },
+        // Dark slate rather than near-black. The background is what shows
+        // through for the few hundred milliseconds a camera move leaves a tile
+        // unsupplied, and at #0b1220 that read as a black flash — its luminance
+        // is ~17.5, and a frame captured mid-switch measured 18.5. #1e293b is
+        // ~44: still dark enough to sit behind the imagery, but a tile miss
+        // reads as "loading" instead of "broken".
+        paint: { "background-color": "#1e293b" },
       },
       {
         id: "aerial",
         type: "raster",
         source: "imagery",
-        // A short fade rather than none: a camera move crosses tile levels, and
-        // an instant swap is what made the map look like it was flashing.
-        paint: { "raster-fade-duration": 250 },
+        // No fade. A cross-fade between tile levels sounds smoother, but it is
+        // measurably worse here: with 250ms set, a frame 140ms into a facility
+        // switch read 7/255 mean brightness — the old tiles fade out before the
+        // (slower, ~160KB) Lands Department tiles arrive, so the map goes black.
+        // With no fade the old tiles stay until the new ones land, and the same
+        // frame read 48.
+        paint: { "raster-fade-duration": 0 },
       },
       {
         id: "places",

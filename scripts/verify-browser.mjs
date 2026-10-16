@@ -142,10 +142,11 @@ check("desktop: phone header disclosures are not rendered",
 check("header stats show RTS-only subset (13 facilities)", /(^|\s)13(\s|$)/.test(bodyText) &&
   /facilit/i.test(bodyText), bodyText.match(/FACILITIES[^\n]*\n?[^\n]*/)?.[0] ?? "");
 check("header stats show 6/13 published", bodyText.includes("6/13"));
-// The Lands Department layer is high-resolution at z12 already, so an opening
-// view that reached z12 is enough — unlike Esri, whose z12 is the mushy mosaic.
-check("opening view pulls Lands Department imagery at z12 or deeper",
-  imageryZooms.size > 0 && Math.max(...imageryZooms) >= 12,
+// Esri is the default, and its Hong Kong mosaic is only real aerial photography
+// from z13 — so the opening view must reach z13. The Aerial style is the one
+// that is high-resolution at z12, and it is opt-in.
+check("opening view pulls imagery at z13 or deeper (Esri's coarse z11-z12 mosaic)",
+  imageryZooms.size > 0 && Math.max(...imageryZooms) >= 13,
   `zooms=${JSON.stringify([...imageryZooms].sort())}`);
 await page.screenshot({ path: path.join(OUT_DIR, "opening-state-collapsed.png") });
 
@@ -206,7 +207,7 @@ try {
 } catch (err) {
   check("switching Satellite -> Aerial reloads the imagery source", false, String(err).slice(0, 120));
 }
-await page.getByRole("button", { name: /^Aerial$/ }).click();
+await page.getByRole("button", { name: /^Satellite$/ }).click();
 await page.waitForTimeout(1500);
 
 // =====================================================================
