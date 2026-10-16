@@ -83,11 +83,14 @@ buried in code.
 
 - Separate Hong Kong-wide annual disposal panel, 2009–2024.
 - A− / A+ font scaling that applies to all UI text, and an EN / 中文 toggle.
-- **Phone layout:** the ranking, legend and trend panels live behind a dock
-  pinned to the bottom edge, one sheet open at a time, so the map keeps ~75–80%
-  of the viewport instead of ~50%. The header stats collapse to a single
-  compact line. From `lg` up the dock disappears and each panel returns to its
-  own corner of the map.
+- **Phone layout:** the opening view is the title and the map, nothing else. The
+  ranking, legend and trend panels live behind a dock pinned to the bottom edge,
+  one sheet open at a time; the font / map-style / language / reset toolbar is
+  collapsed behind a pill in the header card; and the header shows the facility
+  counts only once you tap its chevron. Together that leaves ~79–85% of the
+  viewport for the map instead of ~50%. From `lg` up every one of those
+  disclosures goes away — the toolbar returns to its own row beside the header,
+  the counts are always on, and each panel returns to its own corner.
 
 ## Getting started
 
@@ -143,17 +146,21 @@ exit non-zero on failure.
 ```bash
 npm run dev            # in one terminal
 node scripts/verify-api.mjs        # 68 payload assertions
-node scripts/verify-browser.mjs    # 61 in-browser assertions
+node scripts/verify-browser.mjs    # 79 in-browser assertions
 ```
 
 `verify-browser.mjs` drives a real browser and writes screenshots to
 `out/verify/`. It covers the desktop layout — including a guard that each panel
-stays in its own corner and that the phone dock is absent — plus a 390px mobile
-pass. The mobile pass asserts that the dock is pinned to the bottom edge with
-all three tabs, that no sheet is open on load, that tapping a tab opens the
-right sheet and closes the others, that the map keeps at least 60% of the
-viewport, that the title stays on one line, and that nothing overflows
-horizontally. It uses
+stays in its own corner, that the toolbar is still its own row beside the
+header, and that the phone dock and its disclosures are absent — plus a 390px
+mobile pass. The mobile pass asserts that the dock is pinned to the bottom edge
+with all three tabs, that no sheet is open on load, that tapping a tab opens the
+right sheet and closes the others, that the map keeps at least 75% of the
+viewport, that the title stays on one line (even with the type scaled up), and
+that nothing overflows horizontally. It also drives the two header disclosures:
+both start closed, the chevron reveals the counts and hides them again, the pill
+opens the toolbar *inside* the header card, A+ / A− still work from there, and
+the desktop copy of the toolbar stays hidden. It uses
 Playwright, which is intentionally **not** a dependency
 of this project; `scripts/_playwright.mjs` loads it in this order:
 
@@ -165,10 +172,10 @@ It prefers an installed Chrome and falls back to Playwright's bundled Chromium.
 
 `verify-debug.mjs` is a scratch probe for inspecting what renders at given
 viewport coordinates; it is not part of the test suite. `_probe-mobile.mjs`
-audits the layout at three phone widths and reports each card's position,
-whether its label is clipped, and whether expanding it stays on screen.
-`_shot-mobile.mjs` screenshots the dock collapsed and each sheet open at three
-phone widths.
+audits the layout at three phone widths and reports the title's line count, any
+element overflowing the viewport, and whether each dock sheet stays on screen.
+`_shot-mobile.mjs` screenshots the opening view, both header disclosures, and
+each dock sheet at three phone widths.
 
 ## Project layout
 

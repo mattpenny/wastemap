@@ -95,16 +95,24 @@ const layout = await page.evaluate(() => {
     const el = document.querySelector(sel);
     if (!el) return null;
     const b = el.getBoundingClientRect();
-    return { x: Math.round(b.left), y: Math.round(b.top) };
+    return { x: Math.round(b.left), y: Math.round(b.top), right: Math.round(b.right) };
   };
   return {
     ranking: at('[data-testid="ranking-sheet"]'),
     legend: at('[data-testid="legend-sheet"]'),
     trend: at('[data-testid="trend-sheet"]'),
     info: at('[data-testid="map-info"]'),
+    toolbar: at('[data-testid="display-toolbar"]'),
+    header: at("header"),
     dockTabs: [...document.querySelectorAll("[data-dock-tab]")].filter(
       (el) => el.getBoundingClientRect().height > 0
     ).length,
+    // The phone disclosures must not exist up here: the figures are always on
+    // from md up, and the toolbar is its own row beside the header.
+    phoneDisclosures: [
+      '[data-testid="header-detail-toggle"]',
+      '[data-testid="display-toggle"]',
+    ].filter((sel) => (document.querySelector(sel)?.getBoundingClientRect().height ?? 0) > 0).length,
   };
 });
 check("desktop: ranking card is top-right", layout.ranking.x > 1000 && layout.ranking.y < 120, JSON.stringify(layout.ranking));
@@ -112,6 +120,11 @@ check("desktop: legend card is bottom-left", layout.legend.x < 60 && layout.lege
 check("desktop: trend card is bottom-right", layout.trend.x > 1000 && layout.trend.y > 700, JSON.stringify(layout.trend));
 check("desktop: info button is bottom-left", layout.info.x === 12, JSON.stringify(layout.info));
 check("desktop: phone dock is hidden", layout.dockTabs === 0, `visibleTabs=${layout.dockTabs}`);
+check("desktop: display toolbar is its own row beside the header",
+  layout.toolbar.x > layout.header.right && layout.toolbar.y < 120,
+  `toolbar=${JSON.stringify(layout.toolbar)} header=${JSON.stringify(layout.header)}`);
+check("desktop: phone header disclosures are not rendered",
+  layout.phoneDisclosures === 0, `visible=${layout.phoneDisclosures}`);
 
 // RTS is the default filter: 13 RTS sites (6 standalone + 7 OITF), 6 with a
 // published rate, 7 without.
@@ -251,7 +264,11 @@ if (await oitf.count()) {
     hasTouch: true,
   });
   await mobile.goto(BASE, { waitUntil: "domcontentloaded", timeout: 60000 });
-  await mobile.waitForFunction(() => /facilities/i.test(document.body.innerText), { timeout: 60000 });
+  // The header figures are collapsed on a phone, so "Facilities" is not in the
+  // rendered text on load — waiting on /facilities/i here would time out.
+  // Wait on the title and on the map's loading overlay instead.
+  await mobile.waitForFunction(() => /waste management/i.test(document.body.innerText), { timeout: 60000 });
+  await mobile.waitForFunction(() => !/Loading facility data/.test(document.body.innerText), { timeout: 30000 });
   await mobile.waitForTimeout(6000);
 
   const tab = (name) => mobile.locator(`[data-dock-tab="${name}"]`);
@@ -279,6 +296,12 @@ if (await oitf.count()) {
     };
     const h1 = document.querySelector("h1");
     const cs = h1 ? getComputedStyle(h1) : null;
+    // Is any *visible* element rendering the given exact text? innerText only
+    // covers rendered nodes, so this is a true visibility test.
+    const textShown = (re) =>
+      [...document.querySelectorAll("span, p, button")].some(
+        (el) => re.test(el.innerText?.trim() ?? "") && el.getBoundingClientRect().height > 0
+      );
     return {
       titleLines: h1 ? Math.round(h1.getBoundingClientRect().height / parseFloat(cs.lineHeight)) : null,
       titleText: h1?.innerText,
@@ -287,6 +310,14 @@ if (await oitf.count()) {
       scrollW: document.documentElement.scrollWidth,
       vw: innerWidth,
       vh: innerHeight,
+      figuresShown: textShown(/^(facilities|設施)$/i),
+      publishedShown: textShown(/^(with published rate|有公布處理量)$/i),
+      toolbarShown: rect(document.querySelector('[data-testid="display-toolbar-phone"]'))?.shown ?? null,
+      // The desktop copy of the toolbar lives in the DOM but must never show
+      // down here — that is what `md:flex` is for.
+      desktopToolbarShown: rect(document.querySelector('[data-testid="display-toolbar"]'))?.shown ?? null,
+      detailToggle: rect(document.querySelector('[data-testid="header-detail-toggle"]')),
+      displayToggle: rect(document.querySelector('[data-testid="display-toggle"]')),
     };
   });
 
@@ -309,7 +340,122 @@ if (await oitf.count()) {
   // The whole point of the dock: the map gets the screen back. Header and dock
   // are the only chrome, so everything between them is map.
   const mapShare = (m.dock.top - m.header.bottom) / m.vh;
-  check("mobile: map keeps most of the viewport", mapShare >= 0.6, `${Math.round(mapShare * 100)}%`);
+  check("mobile: map keeps most of the viewport", mapShare >= 0.75, `${Math.round(mapShare * 100)}%`);
+
+  // -----------------------------------------------------------------
+  // The two phone disclosures — header figures and the display toolbar.
+  // Both start closed, so the opening view is the title and nothing else.
+  // -----------------------------------------------------------------
+  check("mobile: header figures are collapsed on load", !m.figuresShown && !m.publishedShown,
+    `facilities=${m.figuresShown} published=${m.publishedShown}`);
+  // The phone toolbar is not rendered at all until its pill is tapped, and the
+  // desktop copy that does exist in the DOM must stay `display: none`.
+  check("mobile: display toolbar is collapsed on load", !m.toolbarShown && !m.desktopToolbarShown,
+    `phone=${m.toolbarShown} desktopCopy=${m.desktopToolbarShown}`);
+  check("mobile: both header chevrons are on screen",
+    m.detailToggle?.shown === true && m.displayToggle?.shown === true,
+    `detail=${JSON.stringify(m.detailToggle)} display=${JSON.stringify(m.displayToggle)}`);
+  check("mobile: header stays short with both disclosures shut", m.header.h <= 90, `h=${m.header.h}`);
+
+  // Chevron -> figures on, chevron -> figures off again.
+  const figuresVisible = () =>
+    mobile.evaluate(() =>
+      [...document.querySelectorAll("span")].some(
+        (el) => /^(facilities|設施)$/i.test(el.innerText?.trim() ?? "") && el.getBoundingClientRect().height > 0
+      )
+    );
+
+  await mobile.locator('[data-testid="header-detail-toggle"]').click();
+  await mobile.waitForTimeout(700);
+  const opened = await mobile.evaluate(() => {
+    const vis = (re) =>
+      [...document.querySelectorAll("span")].some(
+        (el) => re.test(el.innerText?.trim() ?? "") && el.getBoundingClientRect().height > 0
+      );
+    return {
+      figures: vis(/^(facilities|設施)$/i),
+      published: vis(/^(with published rate|有公布處理量)$/i),
+      noFigure: vis(/^(no site figure|無各站數據)$/i),
+      expanded: document
+        .querySelector('[data-testid="header-detail-toggle"]')
+        ?.getAttribute("aria-expanded"),
+    };
+  });
+  check("mobile: chevron reveals the facility figures",
+    opened.figures && opened.published && opened.noFigure, JSON.stringify(opened));
+  check("mobile: chevron reports aria-expanded", opened.expanded === "true", `aria-expanded=${opened.expanded}`);
+  await mobile.screenshot({ path: path.join(OUT_DIR, "mobile-390-header-detail.png") });
+
+  await mobile.locator('[data-testid="header-detail-toggle"]').click();
+  await mobile.waitForTimeout(700);
+  check("mobile: chevron collapses the figures again", !(await figuresVisible()));
+
+  // Pill -> toolbar. It must open inside the header card, not as a loose row
+  // over the map, and the desktop copy of the toolbar must stay hidden.
+  await mobile.locator('[data-testid="display-toggle"]').click();
+  await mobile.waitForTimeout(700);
+  const toolbar = await mobile.evaluate(() => {
+    const el = document.querySelector('[data-testid="display-toolbar-phone"]');
+    const card = document.querySelector("header > div");
+    const t = el?.getBoundingClientRect();
+    const c = card?.getBoundingClientRect();
+    const reachable = (label) =>
+      [...document.querySelectorAll("button")].filter(
+        (b) => b.getAttribute("aria-label") === label && b.getBoundingClientRect().height > 0
+      ).length;
+    return {
+      shown: (t?.height ?? 0) > 0,
+      insideCard: Boolean(t && c && t.left >= c.left - 1 && t.right <= c.right + 1),
+      plusControls: reachable("Increase font size"),
+      minusControls: reachable("Decrease font size"),
+      fs: getComputedStyle(document.documentElement).getPropertyValue("--fs").trim(),
+      scrollW: document.documentElement.scrollWidth,
+      vw: innerWidth,
+    };
+  });
+  check("mobile: display pill opens the toolbar", toolbar.shown && toolbar.plusControls === 1,
+    JSON.stringify(toolbar));
+  check("mobile: toolbar sits inside the header card", toolbar.insideCard, JSON.stringify(toolbar));
+  check("mobile: desktop toolbar copy stays hidden", toolbar.plusControls === 1 && toolbar.minusControls === 1,
+    `A+=${toolbar.plusControls} A-=${toolbar.minusControls}`);
+  check("mobile: opening the toolbar causes no horizontal overflow", toolbar.scrollW <= toolbar.vw,
+    `${toolbar.scrollW}/${toolbar.vw}`);
+  await mobile.screenshot({ path: path.join(OUT_DIR, "mobile-390-display-open.png") });
+
+  // The toolbar must still work from inside the card. Scope the locators to the
+  // header so they can only ever hit the phone copy.
+  const plus = mobile.locator('header button[aria-label="Increase font size"]');
+  await plus.click();
+  await mobile.waitForTimeout(400);
+  const fsUp = await mobile.evaluate(() =>
+    getComputedStyle(document.documentElement).getPropertyValue("--fs").trim()
+  );
+  check("mobile: A+ still scales the type", Number(fsUp) > Number(toolbar.fs), `${toolbar.fs} -> ${fsUp}`);
+
+  const titleAtLargest = await mobile.evaluate(() => {
+    const h1 = document.querySelector("h1");
+    return {
+      lines: Math.round(h1.getBoundingClientRect().height / parseFloat(getComputedStyle(h1).lineHeight)),
+      scrollW: document.documentElement.scrollWidth,
+      vw: innerWidth,
+    };
+  });
+  check("mobile: title stays on one line with the type scaled up", titleAtLargest.lines === 1,
+    JSON.stringify(titleAtLargest));
+
+  await mobile.locator('header button[aria-label="Decrease font size"]').click();
+  await mobile.waitForTimeout(400);
+  const fsBack = await mobile.evaluate(() =>
+    getComputedStyle(document.documentElement).getPropertyValue("--fs").trim()
+  );
+  check("mobile: A- restores the type", Number(fsBack) === Number(toolbar.fs), `${fsUp} -> ${fsBack}`);
+
+  await mobile.locator('[data-testid="display-toggle"]').click();
+  await mobile.waitForTimeout(600);
+  check("mobile: display pill collapses the toolbar again", !(await mobile.evaluate(() =>
+    (document.querySelector('[data-testid="display-toolbar-phone"]')?.getBoundingClientRect().height ?? 0) > 0)));
+  check("mobile: header is short again with both disclosures shut",
+    (await mobile.evaluate(() => Math.round(document.querySelector("header").getBoundingClientRect().height))) <= 90);
 
   // Ranking tab -> sheet with the quick filters (the "toggles" that used to be
   // missing on mobile entirely).

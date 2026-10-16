@@ -45,6 +45,13 @@ const DICT = {
   fontSmaller: ["Decrease font size", "縮小字體"],
   fontLarger: ["Increase font size", "放大字體"],
 
+  // Phone header: two disclosures, so the opening view is just the title.
+  // `displayOptions` labels the pill that hides the font / map / language /
+  // reset toolbar; `facilityFigures` labels the chevron that reveals the
+  // Facilities / published-rate / no-figure counts.
+  displayOptions: ["Display options", "顯示選項"],
+  facilityFigures: ["Facility figures", "設施數字"],
+
   // OITF group row in the intake card
   oitfShort: ["Outlying Islands Transfer Facilities", "離島廢物轉運設施"],
   oitfStations: ["stations", "個轉運設施"],

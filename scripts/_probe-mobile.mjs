@@ -28,7 +28,10 @@ for (const vp of VIEWPORTS) {
     hasTouch: true,
   });
   await page.goto(BASE, { waitUntil: "domcontentloaded", timeout: 60000 });
-  await page.waitForFunction(() => /facilities/i.test(document.body.innerText), { timeout: 60000 });
+  // "Facilities" is not rendered on a phone any more — the header figures are
+  // collapsed by default — so wait on the title and the map's loading overlay.
+  await page.waitForFunction(() => /waste management/i.test(document.body.innerText), { timeout: 60000 });
+  await page.waitForFunction(() => !/Loading facility data/.test(document.body.innerText), { timeout: 30000 });
   await page.waitForTimeout(6000);
 
   const report = await page.evaluate(() => {
@@ -88,39 +91,34 @@ for (const vp of VIEWPORTS) {
   console.log(JSON.stringify(report, null, 2));
   await page.screenshot({ path: path.join(OUT_DIR, `mobile-${vp.name}.png`), fullPage: false });
 
-  // Expand each card in turn and make sure it stays inside the viewport.
-  const expand = async (label, needle) => {
-    const header = page.locator("button", { hasText: needle }).first();
-    await header.click();
-    await page.waitForTimeout(900);
-    const box = await page.evaluate(() => {
-      const cards = [...document.querySelectorAll("aside, div")].filter((el) => {
-        const cs = getComputedStyle(el);
-        return cs.position !== "static" || el.scrollHeight > 0;
-      });
-      const t = [...document.querySelectorAll("h1")][0];
-      return { titleTop: Math.round(t.getBoundingClientRect().top) };
-    });
-    const card = page.locator("aside").first();
-    const isAside = needle.includes("Reported");
-    const target = isAside ? card : page.locator("div").filter({ has: header }).last();
-    const r = await target.boundingBox().catch(() => null);
+  // Each panel lives behind a dock tab now, so "expanding" means tapping the
+  // tab and checking the sheet it opens stays inside the viewport.
+  const expand = async (label, tabName, sheetId) => {
+    const tab = page.locator(`[data-dock-tab="${tabName}"]`);
+    await tab.click();
+    await page.waitForTimeout(1000);
+    const r = await page.evaluate((sel) => {
+      const el = document.querySelector(sel);
+      if (!el) return null;
+      const b = el.getBoundingClientRect();
+      return { y: Math.round(b.top), bottom: Math.round(b.bottom), h: Math.round(b.height) };
+    }, `[data-testid="${sheetId}"]`);
     console.log(
-      `  expand ${label}: ` +
+      `  sheet ${label}: ` +
         (r
-          ? `top=${Math.round(r.y)} bottom=${Math.round(r.y + r.height)} (viewport h=${vp.height}) ` +
-            (r.y >= -1 && r.y + r.height <= vp.height + 1 ? "IN BOUNDS" : "OUT OF BOUNDS")
+          ? `top=${r.y} bottom=${r.bottom} h=${r.h} (viewport h=${vp.height}) ` +
+            (r.y >= -1 && r.bottom <= vp.height + 1 ? "IN BOUNDS" : "OUT OF BOUNDS")
           : "no box")
     );
     await page.screenshot({ path: path.join(OUT_DIR, `mobile-${vp.name}-${label}.png`) });
-    await header.click();
-    await page.waitForTimeout(600);
+    await tab.click();
+    await page.waitForTimeout(700);
   };
 
   if (vp.name === "iphone-se") {
-    await expand("ranking", "Reported throughput by facility");
-    await expand("legend", "Legend");
-    await expand("trend", "Hong Kong-wide annual waste disposal");
+    await expand("ranking", "list", "ranking-sheet");
+    await expand("legend", "legend", "legend-sheet");
+    await expand("trend", "trend", "trend-sheet");
   }
 
   await page.close();

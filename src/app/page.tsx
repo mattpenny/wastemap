@@ -10,6 +10,7 @@ import {
   Map as MapIcon,
   RotateCcw,
   Satellite,
+  SlidersHorizontal,
   TrendingUp,
 } from "lucide-react";
 
@@ -249,6 +250,17 @@ export default function HomePage() {
   const [legendOpen, setLegendOpen] = useState(false);
   const [listOpen, setListOpen] = useState(false);
   const [trendOpen, setTrendOpen] = useState(false);
+  /**
+   * Phone header, both collapsed by default so the opening view is the title
+   * and nothing else. `headerDetailOpen` reveals the facility counts inside the
+   * header card; `controlsOpen` reveals the font / map-style / language / reset
+   * toolbar, which on a phone lives in the same card behind its own chevron
+   * instead of occupying a whole row of map. Neither applies from md up, where
+   * the figures are always shown and the toolbar is its own row beside the
+   * header.
+   */
+  const [headerDetailOpen, setHeaderDetailOpen] = useState(false);
+  const [controlsOpen, setControlsOpen] = useState(false);
   const [fontScale, setFontScale] = useState(FONT_SCALE_DEFAULT);
   /** OITF and any other grouped facilities start collapsed. */
   const [expandedGroups, setExpandedGroups] = useState<string[]>([]);
@@ -450,6 +462,83 @@ export default function HomePage() {
     });
   }, []);
 
+  /**
+   * The display toolbar: font scale, map style, language, reset view.
+   *
+   * Rendered in two places — inside the header card on phones, and as its own
+   * row beside the header from md up — but only one of the two is ever visible
+   * (`md:hidden` / `hidden md:flex`), so this stays a single definition rather
+   * than two copies that can drift apart.
+   */
+  const renderControls = () => (
+    <>
+      {/* Font size — leftmost, so it reads as a display setting that applies to
+          everything to its right. */}
+      <div
+        role="group"
+        aria-label={t("fontLarger", lang)}
+        className="flex items-center gap-0.5 rounded-full border border-white/12 bg-slate-900/85 p-0.5 shadow-lg backdrop-blur-xl"
+      >
+        <button
+          onClick={() => adjustFontScale(-FONT_SCALE_STEP)}
+          disabled={fontScale <= FONT_SCALE_MIN}
+          aria-label={t("fontSmaller", lang)}
+          title={t("fontSmaller", lang)}
+          className="grid h-6 w-6 place-items-center rounded-full text-[length:calc(11px*var(--fs))] font-bold leading-none text-white/60 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60 disabled:opacity-30 disabled:hover:bg-transparent"
+        >
+          A−
+        </button>
+        <button
+          onClick={() => adjustFontScale(FONT_SCALE_STEP)}
+          disabled={fontScale >= FONT_SCALE_MAX}
+          aria-label={t("fontLarger", lang)}
+          title={t("fontLarger", lang)}
+          className="grid h-6 w-6 place-items-center rounded-full text-[length:calc(13px*var(--fs))] font-bold leading-none text-white/60 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60 disabled:opacity-30 disabled:hover:bg-transparent"
+        >
+          A+
+        </button>
+      </div>
+
+      <Segmented<MapStyleId>
+        ariaLabel={t("mapStyle", lang)}
+        value={mapStyle}
+        onChange={setMapStyle}
+        compact
+        options={[
+          {
+            value: "satellite",
+            label: t("satellite", lang),
+            icon: <Satellite className="h-3.5 w-3.5" />,
+          },
+          {
+            value: "official",
+            label: t("officialMap", lang),
+            icon: <MapIcon className="h-3.5 w-3.5" />,
+          },
+        ]}
+      />
+      <Segmented<Lang>
+        ariaLabel={t("language", lang)}
+        value={lang}
+        onChange={setLang}
+        options={[
+          { value: "en", label: "EN" },
+          { value: "zh", label: "中文" },
+        ]}
+      />
+      <button
+        onClick={() => mapHandle.current?.resetView()}
+        aria-label={t("resetView", lang)}
+        title={t("resetView", lang)}
+        className="flex items-center gap-1.5 rounded-full border border-white/12 bg-slate-900/85 px-2.5 py-1.5 text-[length:calc(11px*var(--fs))] font-semibold text-white/70 shadow-lg backdrop-blur-xl transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60"
+      >
+        <RotateCcw className="h-3.5 w-3.5" />
+        {/* Icon-only on narrow screens so the row never wraps. */}
+        <span className="hidden lg:inline">{t("resetView", lang)}</span>
+      </button>
+    </>
+  );
+
   // Read the id out before any narrowing applies. `drawerOpen` is a const
   // derived from `selected`, so TypeScript narrows `selected` to null inside
   // the `!drawerOpen` branch below — which would make `selected?.id` a `never`.
@@ -477,55 +566,115 @@ export default function HomePage() {
 
         {/* ---------------- Overlay UI ---------------- */}
         <div className="pointer-events-none absolute inset-0 z-20">
-          {/* Top stack. On mobile the header and the controls stack vertically
-              so the toggles can never overlap the title; from md up they sit
-              side by side. Phone spacing is tight (top-2 / gap-1.5) because
-              every pixel here is map. */}
+          {/* Top stack. On phones the header is the only thing up here: the
+              display toolbar lives inside the header card, behind its own
+              chevron, instead of taking a row of its own. From md up the two
+              sit side by side, exactly as before. Phone spacing is tight
+              (top-2 / gap-1.5) because every pixel here is map. */}
           <div className="absolute inset-x-3 top-2 flex flex-col gap-1.5 md:inset-x-4 md:top-4 md:flex-row md:items-start md:justify-between md:gap-2">
             <header className="pointer-events-auto w-full md:max-w-md">
               <div className="rounded-2xl border border-white/12 bg-slate-900/85 p-2.5 shadow-2xl backdrop-blur-xl md:p-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    {/* The title must stay on ONE line on phones. Measured: its
-                        rendered width is 19 x font-size, and the space inside
-                        the card is viewport - 54px, so 15px * 1.2 (= 18px,
-                        342px wide) overflows anything under ~412px. Below md
-                        the size is therefore capped by 100vw * 0.043 — which
-                        keeps it on one line down to 320px wide — while still
-                        responding to A- / A+. From md up the header is wide
-                        enough and the original sizing returns. */}
-                    <h1 className="whitespace-nowrap text-[length:clamp(11px,calc(15px*var(--fs)),calc(100vw*0.043))] font-bold leading-tight text-white md:text-lg">
-                      {t("appTitle", lang)}
-                    </h1>
-                    <p className="mt-0.5 text-[length:calc(10px*var(--fs))] uppercase tracking-wider text-emerald-400/90">
+                {/* The title must stay on ONE line on phones. Measured: its
+                    rendered width is 19 x font-size, and the space inside the
+                    card is viewport - 44px, so 15px * 1.2 (= 18px, 342px wide)
+                    overflows anything under ~412px. Below md the size is
+                    therefore capped by 100vw * 0.043 — which keeps it on one
+                    line down to 320px wide — while still responding to A- / A+.
+                    It sits on a line of its own precisely so that the two
+                    disclosure controls below cannot steal width from it. From
+                    md up the header is wide enough and the original sizing
+                    returns. */}
+                <h1 className="whitespace-nowrap text-[length:clamp(11px,calc(15px*var(--fs)),calc(100vw*0.043))] font-bold leading-tight text-white md:text-lg">
+                  {t("appTitle", lang)}
+                </h1>
+
+                {/* Subtitle line. From md up it is just the subtitle. On a
+                    phone the subtitle carries the chevron that opens the
+                    facility figures, and the right end of the line carries the
+                    display-controls pill. */}
+                <div className="mt-0.5 flex items-center justify-between gap-2">
+                  <div className="flex min-w-0 items-center gap-0.5">
+                    <p className="truncate text-[length:calc(10px*var(--fs))] uppercase tracking-wider text-emerald-400/90">
                       {t("appSubtitle", lang)}
                     </p>
+                    <button
+                      type="button"
+                      data-testid="header-detail-toggle"
+                      onClick={() => setHeaderDetailOpen((v) => !v)}
+                      aria-expanded={headerDetailOpen}
+                      aria-label={t(headerDetailOpen ? "collapse" : "expand", lang)}
+                      title={t("facilityFigures", lang)}
+                      className="-my-1 grid h-5 w-5 shrink-0 place-items-center rounded-full text-emerald-400/70 transition-colors hover:bg-white/10 hover:text-emerald-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60 md:hidden"
+                    >
+                      {headerDetailOpen ? (
+                        <ChevronUp className="h-3.5 w-3.5" />
+                      ) : (
+                        <ChevronDown className="h-3.5 w-3.5" />
+                      )}
+                    </button>
                   </div>
+
+                  {/* Display toolbar, collapsed to this pill by default on
+                      phones. `md:hidden` because from md up the toolbar is its
+                      own row beside the header, rendered below. */}
+                  <button
+                    type="button"
+                    data-testid="display-toggle"
+                    onClick={() => setControlsOpen((v) => !v)}
+                    aria-expanded={controlsOpen}
+                    aria-label={t("displayOptions", lang)}
+                    title={t("displayOptions", lang)}
+                    className={cn(
+                      "flex shrink-0 items-center gap-1 rounded-full border border-white/12 bg-slate-900/85 px-2 py-1 text-white/60 shadow-lg backdrop-blur-xl transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60 md:hidden",
+                      controlsOpen && "bg-white/10 text-white"
+                    )}
+                  >
+                    <SlidersHorizontal className="h-3.5 w-3.5" />
+                    {controlsOpen ? (
+                      <ChevronUp className="h-3 w-3" />
+                    ) : (
+                      <ChevronDown className="h-3 w-3" />
+                    )}
+                  </button>
                 </div>
 
-                {/* Stats. On phones a single compact line; the full
-                    three-column grid from md up, where there is room for it.
-                    The inter-stat gap is deliberately much wider than the
-                    label/value gap inside a stat (4px), so where one figure
+                {/* Facility figures. Phone only, and only once the chevron
+                    above is tapped — the opening view is the title and nothing
+                    else. The inter-stat gap is deliberately much wider than
+                    the label/value gap inside a stat (4px), so where one figure
                     ends and the next begins is unambiguous even when the row
                     wraps to a second line. */}
-                <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-white/10 pt-2 md:hidden">
-                  <CompactStat
-                    label={t("facilities", lang)}
-                    value={String(stats.count)}
-                  />
-                  <CompactStat
-                    label={t("publishedRates", lang)}
-                    value={`${stats.withPublishedThroughput}/${stats.count}`}
-                    accent="#10b981"
-                  />
-                  <CompactStat
-                    label={t("noSiteRate", lang)}
-                    value={String(stats.withoutSiteThroughput)}
-                    accent="#f59e0b"
-                  />
-                </div>
+                {headerDetailOpen && (
+                  <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-white/10 pt-2 md:hidden">
+                    <CompactStat
+                      label={t("facilities", lang)}
+                      value={String(stats.count)}
+                    />
+                    <CompactStat
+                      label={t("publishedRates", lang)}
+                      value={`${stats.withPublishedThroughput}/${stats.count}`}
+                      accent="#10b981"
+                    />
+                    <CompactStat
+                      label={t("noSiteRate", lang)}
+                      value={String(stats.withoutSiteThroughput)}
+                      accent="#f59e0b"
+                    />
+                  </div>
+                )}
 
+                {/* Display toolbar, phone only, behind the pill above. */}
+                {controlsOpen && (
+                  <div
+                    data-testid="display-toolbar-phone"
+                    className="mt-2 flex flex-wrap items-center gap-1.5 border-t border-white/10 pt-2 md:hidden"
+                  >
+                    {renderControls()}
+                  </div>
+                )}
+
+                {/* From md up the figures are always on, as a three-column
+                    grid — there is room for them, and nothing to hide. */}
                 <div className="mt-3 hidden grid-cols-3 gap-3 border-t border-white/10 pt-3 md:grid">
                   <StatPill label={t("facilities", lang)} value={String(stats.count)} />
                   <StatPill
@@ -552,72 +701,14 @@ export default function HomePage() {
               </div>
             </header>
 
-            {/* Controls — a single row on every breakpoint. */}
-            <div className="pointer-events-auto flex flex-wrap items-center gap-1.5 sm:gap-2">
-              {/* Font size — leftmost, so it reads as a display setting that
-                  applies to everything to its right. */}
-              <div
-                role="group"
-                aria-label={t("fontLarger", lang)}
-                className="flex items-center gap-0.5 rounded-full border border-white/12 bg-slate-900/85 p-0.5 shadow-lg backdrop-blur-xl"
-              >
-                <button
-                  onClick={() => adjustFontScale(-FONT_SCALE_STEP)}
-                  disabled={fontScale <= FONT_SCALE_MIN}
-                  aria-label={t("fontSmaller", lang)}
-                  title={t("fontSmaller", lang)}
-                  className="grid h-6 w-6 place-items-center rounded-full text-[length:calc(11px*var(--fs))] font-bold leading-none text-white/60 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60 disabled:opacity-30 disabled:hover:bg-transparent"
-                >
-                  A−
-                </button>
-                <button
-                  onClick={() => adjustFontScale(FONT_SCALE_STEP)}
-                  disabled={fontScale >= FONT_SCALE_MAX}
-                  aria-label={t("fontLarger", lang)}
-                  title={t("fontLarger", lang)}
-                  className="grid h-6 w-6 place-items-center rounded-full text-[length:calc(13px*var(--fs))] font-bold leading-none text-white/60 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60 disabled:opacity-30 disabled:hover:bg-transparent"
-                >
-                  A+
-                </button>
-              </div>
-
-              <Segmented<MapStyleId>
-                ariaLabel={t("mapStyle", lang)}
-                value={mapStyle}
-                onChange={setMapStyle}
-                compact
-                options={[
-                  {
-                    value: "satellite",
-                    label: t("satellite", lang),
-                    icon: <Satellite className="h-3.5 w-3.5" />,
-                  },
-                  {
-                    value: "official",
-                    label: t("officialMap", lang),
-                    icon: <MapIcon className="h-3.5 w-3.5" />,
-                  },
-                ]}
-              />
-              <Segmented<Lang>
-                ariaLabel={t("language", lang)}
-                value={lang}
-                onChange={setLang}
-                options={[
-                  { value: "en", label: "EN" },
-                  { value: "zh", label: "中文" },
-                ]}
-              />
-              <button
-                onClick={() => mapHandle.current?.resetView()}
-                aria-label={t("resetView", lang)}
-                title={t("resetView", lang)}
-                className="flex items-center gap-1.5 rounded-full border border-white/12 bg-slate-900/85 px-2.5 py-1.5 text-[length:calc(11px*var(--fs))] font-semibold text-white/70 shadow-lg backdrop-blur-xl transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60"
-              >
-                <RotateCcw className="h-3.5 w-3.5" />
-                {/* Icon-only on narrow screens so the row never wraps. */}
-                <span className="hidden lg:inline">{t("resetView", lang)}</span>
-              </button>
+            {/* Display toolbar. Its own row beside the header from md up; on
+                phones the whole block is hidden, because the toolbar lives
+                inside the header card behind its own pill instead. */}
+            <div
+              data-testid="display-toolbar"
+              className="pointer-events-auto hidden flex-wrap items-center gap-1.5 sm:gap-2 md:flex"
+            >
+              {renderControls()}
             </div>
           </div>
 
