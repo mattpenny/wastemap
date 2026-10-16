@@ -3,7 +3,7 @@
  * migration. Polls until the dev server answers, then asserts the data-honesty
  * invariants, prints a summary, and always exits non-zero on any failure.
  */
-const BASE = "http://localhost:3000";
+const BASE = process.env.BASE ?? "http://localhost:3000";
 
 async function waitForServer(timeoutMs = 120000) {
   const deadline = Date.now() + timeoutMs;

@@ -28,7 +28,9 @@ page.on("console", (msg) => {
   if (msg.type() === "error") errors.push(`console: ${msg.text()}`);
 });
 
-await page.goto("http://localhost:3000", { waitUntil: "domcontentloaded", timeout: 60000 });
+const BASE = process.env.BASE ?? "http://localhost:3000";
+
+await page.goto(BASE, { waitUntil: "domcontentloaded", timeout: 60000 });
 // Let the map + deck.gl layers settle (tile streams never go idle, so waiting
 // for networkidle would hang indefinitely). Wait for the map's loading overlay
 // to disappear (style `load` event or the 12s fallback), then let pillars frame.
