@@ -53,9 +53,17 @@ const check = (name, ok, detail = "") => {
 
 // Panel headers carry aria-label="Expand"/"Collapse", which overrides their
 // visible text as the accessible name — locate them by text instead.
-const rankingHeader = page.locator("button", { hasText: "Reported throughput by facility" });
-const legendHeader = page.locator("button", { hasText: /^Legend$/ });
-const trendHeader = page.locator("button", { hasText: "Hong Kong-wide annual waste disposal" });
+// `:not([data-dock-tab])` excludes the phone bottom dock: its "Legend" tab
+// carries the same label as the legend card's own header.
+const rankingHeader = page.locator("button:not([data-dock-tab])", {
+  hasText: "Reported throughput by facility",
+});
+const legendHeader = page.locator("button:not([data-dock-tab])", {
+  hasText: /^Legend$/,
+});
+const trendHeader = page.locator("button:not([data-dock-tab])", {
+  hasText: "Hong Kong-wide annual waste disposal",
+});
 
 // =====================================================================
 // 1. Opening state — everything collapsed, RTS pre-selected
@@ -77,6 +85,33 @@ const chevrons = await Promise.all(
   )
 );
 check("all collapsed cards show a down chevron", chevrons.every(Boolean), JSON.stringify(chevrons));
+
+// Each card must stay in the corner it has always occupied, and the phone dock
+// must be entirely absent up here. Both regressed while the dock was built: its
+// tabs leaked onto desktop as loose buttons (their wrapper is `lg:contents`),
+// and a stray `ml-1` pushed the info button 4px off its corner.
+const layout = await page.evaluate(() => {
+  const at = (sel) => {
+    const el = document.querySelector(sel);
+    if (!el) return null;
+    const b = el.getBoundingClientRect();
+    return { x: Math.round(b.left), y: Math.round(b.top) };
+  };
+  return {
+    ranking: at('[data-testid="ranking-sheet"]'),
+    legend: at('[data-testid="legend-sheet"]'),
+    trend: at('[data-testid="trend-sheet"]'),
+    info: at('[data-testid="map-info"]'),
+    dockTabs: [...document.querySelectorAll("[data-dock-tab]")].filter(
+      (el) => el.getBoundingClientRect().height > 0
+    ).length,
+  };
+});
+check("desktop: ranking card is top-right", layout.ranking.x > 1000 && layout.ranking.y < 120, JSON.stringify(layout.ranking));
+check("desktop: legend card is bottom-left", layout.legend.x < 60 && layout.legend.y > 700, JSON.stringify(layout.legend));
+check("desktop: trend card is bottom-right", layout.trend.x > 1000 && layout.trend.y > 700, JSON.stringify(layout.trend));
+check("desktop: info button is bottom-left", layout.info.x === 12, JSON.stringify(layout.info));
+check("desktop: phone dock is hidden", layout.dockTabs === 0, `visibleTabs=${layout.dockTabs}`);
 
 // RTS is the default filter: 13 RTS sites (6 standalone + 7 OITF), 6 with a
 // published rate, 7 without.
@@ -199,11 +234,15 @@ if (await oitf.count()) {
 }
 
 // =====================================================================
-// 9. Mobile layout — the three cards must exist, and the title must not wrap
+// 9. Mobile layout — bottom dock, one sheet at a time, one-line title
 // =====================================================================
-// These were real bugs: the ranking card and the trend panel were `hidden`
-// below lg, so on a phone they — and the ranking card's quick filters — simply
-// did not exist, and the title wrapped onto two lines under ~412px.
+// History, in order: (a) the ranking card and the trend panel were `hidden`
+// below lg, so on a phone they — and the ranking card's quick filters — did not
+// exist at all, and the title wrapped onto two lines under ~412px; (b) with
+// them restored as three always-on cards plus a 48px gap they ate ~190px of a
+// 667px screen. The cards now live behind a dock pinned to the bottom edge, so
+// these checks cover the dock, the sheet each tab opens, and how much map is
+// left over.
 {
   const mobile = await browser.newPage({
     viewport: { width: 390, height: 844 },
@@ -215,45 +254,91 @@ if (await oitf.count()) {
   await mobile.waitForFunction(() => /facilities/i.test(document.body.innerText), { timeout: 60000 });
   await mobile.waitForTimeout(6000);
 
+  const tab = (name) => mobile.locator(`[data-dock-tab="${name}"]`);
+  /** Is this sheet on screen right now? */
+  const sheetShown = (id) =>
+    mobile.evaluate(
+      (sel) => {
+        const el = document.querySelector(sel);
+        return Boolean(el && el.getBoundingClientRect().height > 0);
+      },
+      `[data-testid="${id}"]`
+    );
+
   const m = await mobile.evaluate(() => {
-    const vis = (el) => {
+    const rect = (el) => {
       if (!el) return null;
       const r = el.getBoundingClientRect();
-      const cs = getComputedStyle(el);
-      return { w: Math.round(r.width), h: Math.round(r.height), shown: r.width > 0 && r.height > 0 && cs.display !== "none" };
-    };
-    const byText = (needle) => {
-      const el = [...document.querySelectorAll("button")].find((e) => e.innerText?.toLowerCase().includes(needle));
-      return el ? { ...vis(el), text: el.innerText.replace(/\s+/g, " ").trim() } : null;
+      return {
+        top: Math.round(r.top),
+        bottom: Math.round(r.bottom),
+        w: Math.round(r.width),
+        h: Math.round(r.height),
+        shown: r.width > 0 && r.height > 0 && getComputedStyle(el).display !== "none",
+      };
     };
     const h1 = document.querySelector("h1");
     const cs = h1 ? getComputedStyle(h1) : null;
-    const lines = h1 ? Math.round(h1.getBoundingClientRect().height / parseFloat(cs.lineHeight)) : null;
     return {
-      titleLines: lines,
+      titleLines: h1 ? Math.round(h1.getBoundingClientRect().height / parseFloat(cs.lineHeight)) : null,
       titleText: h1?.innerText,
-      ranking: byText("reported throughput by facility"),
-      legend: byText("legend"),
-      trend: byText("hong kong-wide annual waste disposal"),
+      header: rect(document.querySelector("header")),
+      dock: rect(document.querySelector('[data-testid="bottom-dock"]')),
       scrollW: document.documentElement.scrollWidth,
       vw: innerWidth,
+      vh: innerHeight,
     };
   });
 
   check("mobile: title stays on one line", m.titleLines === 1, `lines=${m.titleLines} text="${m.titleText}"`);
-  check("mobile: ranking card visible", Boolean(m.ranking?.shown), JSON.stringify(m.ranking));
-  check("mobile: legend card visible", Boolean(m.legend?.shown), JSON.stringify(m.legend));
-  check("mobile: trend card visible", Boolean(m.trend?.shown), JSON.stringify(m.trend));
+  check("mobile: dock is pinned to the bottom edge", Math.abs(m.dock.bottom - m.vh) <= 1, JSON.stringify(m.dock));
+  check(
+    "mobile: dock carries all three tabs",
+    (await tab("list").count()) === 1 &&
+      (await tab("legend").count()) === 1 &&
+      (await tab("trend").count()) === 1
+  );
+  check(
+    "mobile: no sheet is open on load",
+    !(await sheetShown("ranking-sheet")) &&
+      !(await sheetShown("legend-sheet")) &&
+      !(await sheetShown("trend-sheet"))
+  );
   check("mobile: no horizontal overflow", m.scrollW <= m.vw, `scrollW=${m.scrollW} vw=${m.vw}`);
 
-  // The ranking card's quick filters are the "toggles" that were missing on
-  // mobile; expanding the card must reveal them.
-  const rankingHeader = mobile.locator("button", { hasText: "Reported throughput by facility" }).first();
-  await rankingHeader.click();
+  // The whole point of the dock: the map gets the screen back. Header and dock
+  // are the only chrome, so everything between them is map.
+  const mapShare = (m.dock.top - m.header.bottom) / m.vh;
+  check("mobile: map keeps most of the viewport", mapShare >= 0.6, `${Math.round(mapShare * 100)}%`);
+
+  // Ranking tab -> sheet with the quick filters (the "toggles" that used to be
+  // missing on mobile entirely).
+  await tab("list").click();
   await mobile.waitForTimeout(900);
   const chips = await mobile.getByRole("button", { name: /^RTS$/ }).count();
-  check("mobile: ranking card expands to its filter toggles", chips === 1, `rtsChips=${chips}`);
-  await mobile.screenshot({ path: path.join(OUT_DIR, "mobile-390-ranking-expanded.png") });
+  check("mobile: ranking tab opens its sheet with filter toggles", chips === 1, `rtsChips=${chips}`);
+  await mobile.screenshot({ path: path.join(OUT_DIR, "mobile-390-sheet-ranking.png") });
+
+  // Accordion: opening the legend must close the ranking sheet, or two sheets
+  // stack and push the map off screen.
+  await tab("legend").click();
+  await mobile.waitForTimeout(900);
+  check("mobile: legend tab opens the legend sheet", await sheetShown("legend-sheet"));
+  check("mobile: sheets are mutually exclusive", !(await sheetShown("ranking-sheet")));
+  await mobile.screenshot({ path: path.join(OUT_DIR, "mobile-390-sheet-legend.png") });
+
+  await tab("trend").click();
+  await mobile.waitForTimeout(1200);
+  const charts = await mobile.locator(".recharts-wrapper").count();
+  check("mobile: trend tab renders the chart", charts === 1, `charts=${charts}`);
+  check("mobile: trend sheet is on screen", await sheetShown("trend-sheet"));
+  await mobile.screenshot({ path: path.join(OUT_DIR, "mobile-390-sheet-trend.png") });
+
+  // Tapping the active tab again must close it, leaving the map alone.
+  await tab("trend").click();
+  await mobile.waitForTimeout(700);
+  check("mobile: tapping the active tab closes its sheet", !(await sheetShown("trend-sheet")));
+
   await mobile.close();
 }
 

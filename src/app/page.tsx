@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AlertTriangle,
   ChevronDown,
@@ -10,6 +10,7 @@ import {
   Map as MapIcon,
   RotateCcw,
   Satellite,
+  TrendingUp,
 } from "lucide-react";
 
 import WasteMap3D, {
@@ -103,6 +104,79 @@ function StatPill({
         {value}
       </span>
     </div>
+  );
+}
+
+/**
+ * Phone variant of {@link StatPill}: label and value on one baseline.
+ *
+ * The stacked pill is ~44px tall, and three of them cost ~44px of a 667px
+ * phone — map that never comes back. On one line the same three figures fit in
+ * about a third of that. Wraps to a second line if `--fs` is cranked up.
+ */
+function CompactStat({
+  label,
+  value,
+  accent,
+}: {
+  label: string;
+  value: string;
+  accent?: string;
+}) {
+  return (
+    <span className="flex min-w-0 items-baseline gap-1">
+      <span className="text-[length:calc(9.5px*var(--fs))] uppercase tracking-wide text-white/40">
+        {label}
+      </span>
+      <span
+        className="text-[length:calc(12px*var(--fs))] font-bold tabular-nums leading-none"
+        style={accent ? { color: accent } : undefined}
+      >
+        {value}
+      </span>
+    </span>
+  );
+}
+
+/**
+ * One tab in the phone bottom dock.
+ *
+ * Icon over a short label, so three of them fit a 320px-wide bar without
+ * truncating — which is exactly why the cards' full titles cannot be used here.
+ */
+function DockTab({
+  name,
+  active,
+  onClick,
+  icon,
+  label,
+}: {
+  name: string;
+  active: boolean;
+  onClick: () => void;
+  icon: ReactNode;
+  label: string;
+}) {
+  return (
+    <button
+      data-dock-tab={name}
+      onClick={onClick}
+      aria-pressed={active}
+      className={cn(
+        // `lg:hidden`: the dock is a phone-only affordance. Its wrapper is
+        // `lg:contents` on desktop, so without this the tabs would fall into
+        // the overlay as loose buttons.
+        "flex min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-xl px-1 py-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60 lg:hidden",
+        active
+          ? "bg-emerald-500/15 text-emerald-300"
+          : "text-white/55 hover:bg-white/8 hover:text-white"
+      )}
+    >
+      {icon}
+      <span className="max-w-full truncate text-[length:calc(9.5px*var(--fs))] font-semibold uppercase tracking-wide">
+        {label}
+      </span>
+    </button>
   );
 }
 
@@ -321,6 +395,33 @@ export default function HomePage() {
 
   const handleClose = useCallback(() => setSelected(null), []);
 
+  /**
+   * Bottom-dock tabs (phones only).
+   *
+   * Below lg the three panels are mutually exclusive: they are sheets stacked
+   * above one dock, so two open at once would push the map off screen. From lg
+   * up they are independent cards in three different corners — exactly as
+   * before — so the accordion behaviour applies only while the dock is the
+   * active layout.
+   */
+  const toggleDockPanel = useCallback(
+    (which: "list" | "legend" | "trend") => {
+      const accordion =
+        typeof window !== "undefined" &&
+        window.matchMedia("(max-width: 1023px)").matches;
+
+      const current =
+        which === "list" ? listOpen : which === "legend" ? legendOpen : trendOpen;
+      const next = !current;
+      const closeOthers = accordion && next;
+
+      setListOpen(which === "list" ? next : closeOthers ? false : listOpen);
+      setLegendOpen(which === "legend" ? next : closeOthers ? false : legendOpen);
+      setTrendOpen(which === "trend" ? next : closeOthers ? false : trendOpen);
+    },
+    [listOpen, legendOpen, trendOpen]
+  );
+
   const toggleCategory = useCallback((category: FacilityCategory) => {
     setVisibleCategories((prev) => {
       const next = prev.includes(category)
@@ -378,10 +479,11 @@ export default function HomePage() {
         <div className="pointer-events-none absolute inset-0 z-20">
           {/* Top stack. On mobile the header and the controls stack vertically
               so the toggles can never overlap the title; from md up they sit
-              side by side. */}
-          <div className="absolute inset-x-3 top-3 flex flex-col gap-2 md:inset-x-4 md:top-4 md:flex-row md:items-start md:justify-between">
+              side by side. Phone spacing is tight (top-2 / gap-1.5) because
+              every pixel here is map. */}
+          <div className="absolute inset-x-3 top-2 flex flex-col gap-1.5 md:inset-x-4 md:top-4 md:flex-row md:items-start md:justify-between md:gap-2">
             <header className="pointer-events-auto w-full md:max-w-md">
-              <div className="rounded-2xl border border-white/12 bg-slate-900/85 p-3.5 shadow-2xl backdrop-blur-xl md:p-4">
+              <div className="rounded-2xl border border-white/12 bg-slate-900/85 p-2.5 shadow-2xl backdrop-blur-xl md:p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     {/* The title must stay on ONE line on phones. Measured: its
@@ -401,8 +503,30 @@ export default function HomePage() {
                   </div>
                 </div>
 
-                {/* Stats */}
-                <div className="mt-3 grid grid-cols-3 gap-3 border-t border-white/10 pt-3">
+                {/* Stats. On phones a single compact line; the full
+                    three-column grid from md up, where there is room for it.
+                    The inter-stat gap is deliberately much wider than the
+                    label/value gap inside a stat (4px), so where one figure
+                    ends and the next begins is unambiguous even when the row
+                    wraps to a second line. */}
+                <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-white/10 pt-2 md:hidden">
+                  <CompactStat
+                    label={t("facilities", lang)}
+                    value={String(stats.count)}
+                  />
+                  <CompactStat
+                    label={t("publishedRates", lang)}
+                    value={`${stats.withPublishedThroughput}/${stats.count}`}
+                    accent="#10b981"
+                  />
+                  <CompactStat
+                    label={t("noSiteRate", lang)}
+                    value={String(stats.withoutSiteThroughput)}
+                    accent="#f59e0b"
+                  />
+                </div>
+
+                <div className="mt-3 hidden grid-cols-3 gap-3 border-t border-white/10 pt-3 md:grid">
                   <StatPill label={t("facilities", lang)} value={String(stats.count)} />
                   <StatPill
                     label={t("publishedRates", lang)}
@@ -497,23 +621,37 @@ export default function HomePage() {
             </div>
           </div>
 
-          {/* Bottom panel stack. On phones and tablets these three cards form
-              one column anchored above the info button, so the ranking list and
-              the trend panel — and the ranking card's quick filters — are
-              actually reachable on mobile instead of being dropped entirely.
-              From lg up the container goes static, which lets each card return
-              to its own corner of the map via `lg:absolute`. */}
-          <div className="pointer-events-none absolute inset-x-3 bottom-12 z-20 flex flex-col gap-2 lg:static lg:inset-x-auto lg:bottom-auto">
+          {/* Bottom area. Two completely different layouts share these cards.
+              Phones (< lg): a dock pinned flush to the bottom edge — three short
+              tabs plus the map "i" button. Only the active panel is shown, as a
+              sheet sitting directly on top of the dock. Three always-on cards
+              plus the old 48px gap cost ~190px of a 667px screen, which left the
+              map barely half the viewport; the dock costs ~44px and hands back
+              roughly 150px.
+              Desktop (lg+): `lg:contents` dissolves the dock wrapper, so the
+              info button inside falls back to the bottom-left corner and each
+              card returns to its own corner of the map via `lg:absolute`. */}
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex flex-col lg:static lg:z-20 lg:block">
 
-          {/* Ranking list. Full-width row in the mobile stack; its own top-right
+          {/* Ranking list. A sheet above the dock on phones; its own top-right
               card from lg up. */}
           {ranking.length > 0 && !drawerOpen && (
             <aside
+              data-testid="ranking-sheet"
               className={cn(
-                "pointer-events-auto flex w-full flex-col overflow-hidden rounded-2xl border border-white/12 bg-slate-900/85 shadow-2xl backdrop-blur-xl lg:absolute lg:right-14 lg:top-16 lg:w-72",
+                "pointer-events-auto w-full flex-col overflow-hidden border border-white/12 bg-slate-900/85 shadow-2xl backdrop-blur-xl",
+                // Phone: a sheet that exists only while its tab is active, so
+                // the map is never covered by a panel nobody opened. The bottom
+                // edge is square and borderless because the dock sits flush
+                // underneath it.
+                listOpen
+                  ? "flex max-h-[46vh] rounded-t-2xl border-b-0"
+                  : "hidden",
+                // Desktop: its own top-right card.
+                "lg:absolute lg:right-14 lg:top-16 lg:flex lg:w-72 lg:rounded-2xl lg:border-b",
                 // `top-16` is the same 4rem offset the zoom/compass control uses
                 // (see .maplibregl-ctrl-top-right), so the two line up exactly.
-                listOpen && "max-h-[min(45vh,24rem)] lg:max-h-[min(62vh,32rem)]"
+                listOpen && "lg:max-h-[min(62vh,32rem)]"
               )}
             >
               <button
@@ -744,12 +882,19 @@ export default function HomePage() {
             </aside>
           )}
 
-          {/* Legend + filters. A row in the mobile stack; pinned to the
-              bottom-left, raised clear of the map "i" button, from lg up.
-              No width class: the wrapper stretches as a flex item on mobile,
-              and shrink-wraps to the card once it goes absolute at lg. */}
-          <div className="pointer-events-auto lg:absolute lg:bottom-12 lg:left-4">
-            <div className="rounded-2xl border border-white/12 bg-slate-900/85 shadow-2xl backdrop-blur-xl">
+          {/* Legend + filters. A sheet above the dock on phones; pinned to the
+              bottom-left from lg up. No width class on the wrapper: it is a
+              full-width sheet on phones, and shrink-wraps to the card once it
+              goes absolute at lg. */}
+          <div
+            data-testid="legend-sheet"
+            className={cn(
+              "pointer-events-auto w-full",
+              legendOpen ? "block" : "hidden",
+              "lg:absolute lg:bottom-12 lg:left-4 lg:block lg:w-auto"
+            )}
+          >
+            <div className="max-h-[46vh] overflow-y-auto rounded-t-2xl border border-b-0 border-white/12 bg-slate-900/85 shadow-2xl backdrop-blur-xl lg:max-h-none lg:rounded-2xl lg:border-b">
               <button
                 onClick={() => setLegendOpen((v) => !v)}
                 className="flex w-full items-center justify-between gap-4 px-3.5 py-2.5 text-left"
@@ -810,28 +955,76 @@ export default function HomePage() {
               NOT a section of the facility drawer: EPD publishes no per-facility
               time series, and territory totals inside a facility card read as if
               that facility receives that waste mix. Hidden while the drawer is
-              open so the two never overlap. A row in the mobile stack; its own
-              bottom-right card from lg up. */}
+              open so the two never overlap. A sheet above the dock on phones;
+              its own bottom-right card from lg up. */}
           {!drawerOpen && (
-            <div className="pointer-events-auto lg:absolute lg:bottom-3 lg:right-3">
+            <div
+              data-testid="trend-sheet"
+              className={cn(
+                "pointer-events-auto w-full",
+                trendOpen ? "block" : "hidden",
+                "lg:absolute lg:bottom-3 lg:right-3 lg:block lg:w-auto"
+              )}
+            >
               <TerritoryTrendCard
                 lang={lang}
                 isOpen={trendOpen}
                 onToggle={() => setTrendOpen((v) => !v)}
-                className="w-full lg:w-72"
+                // The chart is taller than the other two sheets, so the phone
+                // sheet scrolls rather than clipping the legend under the plot.
+                className={cn(
+                  "w-full lg:w-72",
+                  trendOpen &&
+                    "max-h-[52vh] overflow-y-auto rounded-t-2xl lg:max-h-none lg:overflow-hidden lg:rounded-2xl"
+                )}
               />
             </div>
           )}
-          </div>
 
-          {/* Map "i" — holds the imagery credit and the tech explanation that
-              used to sit permanently on screen. Stays in the bottom-left corner
-              at every size, clear of the mobile panel stack. */}
-          <MapInfoButton
-            lang={lang}
-            mapStyle={mapStyle}
-            className="pointer-events-auto absolute bottom-3 left-3 z-30"
-          />
+          {/* Dock — phones only. Three short tabs plus the map "i" button.
+              `lg:contents` dissolves this wrapper on desktop, which drops the
+              info button back into the bottom-left corner (it carries
+              `lg:absolute` of its own) and leaves the cards to their own
+              corners. */}
+          <div
+            data-testid="bottom-dock"
+            className="pointer-events-auto flex items-stretch gap-1 border-t border-white/10 bg-slate-900/90 px-2 pb-2 pt-1.5 backdrop-blur-xl lg:contents"
+          >
+            <DockTab
+              name="list"
+              active={listOpen}
+              onClick={() => toggleDockPanel("list")}
+              icon={<Layers className="h-4 w-4" />}
+              label={t("dockRanking", lang)}
+            />
+            <DockTab
+              name="legend"
+              active={legendOpen}
+              onClick={() => toggleDockPanel("legend")}
+              icon={<ListFilter className="h-4 w-4" />}
+              label={t("dockLegend", lang)}
+            />
+            {!drawerOpen && (
+              <DockTab
+                name="trend"
+                active={trendOpen}
+                onClick={() => toggleDockPanel("trend")}
+                icon={<TrendingUp className="h-4 w-4" />}
+                label={t("dockTrend", lang)}
+              />
+            )}
+
+            {/* Map "i" — holds the imagery credit and the tech explanation that
+                used to sit permanently on screen. Sits at the right end of the
+                dock on phones (spaced by the dock's own `gap-1`), and back in
+                the bottom-left corner from lg up. */}
+            <MapInfoButton
+              lang={lang}
+              mapStyle={mapStyle}
+              className="shrink-0 lg:absolute lg:bottom-3 lg:left-3 lg:z-30"
+            />
+          </div>
+          </div>
         </div>
       </div>
 

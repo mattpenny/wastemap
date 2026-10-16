@@ -17,6 +17,13 @@ const DICT = {
   intakeRanking: ["Reported throughput by facility", "各設施公布處理量"],
   publishedRates: ["With published rate", "有公布處理量"],
   noSiteRate: ["No site figure", "無各站數據"],
+
+  // Short labels for the phone bottom dock. The full card titles ("Reported
+  // throughput by facility", "Hong Kong-wide annual waste disposal") are far
+  // too long to sit side by side in a tab bar.
+  dockRanking: ["Ranking", "排名"],
+  dockLegend: ["Legend", "圖例"],
+  dockTrend: ["Trend", "趨勢"],
   notPublished: ["N/A", "未公布"],
   reportedThroughput: ["Published throughput", "公布處理量"],
   notPublishedPerFacility: ["No per-facility figure is published.", "環保署並無公布各設施的處理量。"],
