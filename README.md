@@ -138,7 +138,10 @@ node scripts/verify-browser.mjs    # 44 in-browser assertions
 ```
 
 `verify-browser.mjs` drives a real browser and writes screenshots to
-`out/verify/`. It uses Playwright, which is intentionally **not** a dependency
+`out/verify/`. It covers the desktop layout and a 390px mobile pass, which
+asserts that the three collapsible cards are actually present on a phone, that
+the title stays on one line, and that nothing overflows horizontally. It uses
+Playwright, which is intentionally **not** a dependency
 of this project; `scripts/_playwright.mjs` loads it in this order:
 
 1. a local `playwright` install (`npm i -D playwright`), else
@@ -148,7 +151,9 @@ of this project; `scripts/_playwright.mjs` loads it in this order:
 It prefers an installed Chrome and falls back to Playwright's bundled Chromium.
 
 `verify-debug.mjs` is a scratch probe for inspecting what renders at given
-viewport coordinates; it is not part of the test suite.
+viewport coordinates; it is not part of the test suite. `_probe-mobile.mjs`
+audits the layout at three phone widths and reports each card's position,
+whether its label is clipped, and whether expanding it stays on screen.
 
 ## Project layout
 

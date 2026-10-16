@@ -199,7 +199,66 @@ if (await oitf.count()) {
 }
 
 // =====================================================================
-// 9. No runtime errors
+// 9. Mobile layout — the three cards must exist, and the title must not wrap
+// =====================================================================
+// These were real bugs: the ranking card and the trend panel were `hidden`
+// below lg, so on a phone they — and the ranking card's quick filters — simply
+// did not exist, and the title wrapped onto two lines under ~412px.
+{
+  const mobile = await browser.newPage({
+    viewport: { width: 390, height: 844 },
+    deviceScaleFactor: 2,
+    isMobile: true,
+    hasTouch: true,
+  });
+  await mobile.goto(BASE, { waitUntil: "domcontentloaded", timeout: 60000 });
+  await mobile.waitForFunction(() => /facilities/i.test(document.body.innerText), { timeout: 60000 });
+  await mobile.waitForTimeout(6000);
+
+  const m = await mobile.evaluate(() => {
+    const vis = (el) => {
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      const cs = getComputedStyle(el);
+      return { w: Math.round(r.width), h: Math.round(r.height), shown: r.width > 0 && r.height > 0 && cs.display !== "none" };
+    };
+    const byText = (needle) => {
+      const el = [...document.querySelectorAll("button")].find((e) => e.innerText?.toLowerCase().includes(needle));
+      return el ? { ...vis(el), text: el.innerText.replace(/\s+/g, " ").trim() } : null;
+    };
+    const h1 = document.querySelector("h1");
+    const cs = h1 ? getComputedStyle(h1) : null;
+    const lines = h1 ? Math.round(h1.getBoundingClientRect().height / parseFloat(cs.lineHeight)) : null;
+    return {
+      titleLines: lines,
+      titleText: h1?.innerText,
+      ranking: byText("reported throughput by facility"),
+      legend: byText("legend"),
+      trend: byText("hong kong-wide annual waste disposal"),
+      scrollW: document.documentElement.scrollWidth,
+      vw: innerWidth,
+    };
+  });
+
+  check("mobile: title stays on one line", m.titleLines === 1, `lines=${m.titleLines} text="${m.titleText}"`);
+  check("mobile: ranking card visible", Boolean(m.ranking?.shown), JSON.stringify(m.ranking));
+  check("mobile: legend card visible", Boolean(m.legend?.shown), JSON.stringify(m.legend));
+  check("mobile: trend card visible", Boolean(m.trend?.shown), JSON.stringify(m.trend));
+  check("mobile: no horizontal overflow", m.scrollW <= m.vw, `scrollW=${m.scrollW} vw=${m.vw}`);
+
+  // The ranking card's quick filters are the "toggles" that were missing on
+  // mobile; expanding the card must reveal them.
+  const rankingHeader = mobile.locator("button", { hasText: "Reported throughput by facility" }).first();
+  await rankingHeader.click();
+  await mobile.waitForTimeout(900);
+  const chips = await mobile.getByRole("button", { name: /^RTS$/ }).count();
+  check("mobile: ranking card expands to its filter toggles", chips === 1, `rtsChips=${chips}`);
+  await mobile.screenshot({ path: path.join(OUT_DIR, "mobile-390-ranking-expanded.png") });
+  await mobile.close();
+}
+
+// =====================================================================
+// 10. No runtime errors
 // =====================================================================
 const realErrors = errors.filter(
   (e) => !/favicon|Download the React DevTools|WebGL|SwiftShader|GPU stall/i.test(e)

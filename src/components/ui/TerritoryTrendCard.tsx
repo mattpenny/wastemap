@@ -15,12 +15,15 @@ import { ChevronDown, ChevronUp, TrendingUp } from "lucide-react";
 
 import { HK_WASTE_TREND } from "@/data/hk-waste-trend";
 import { t, type Lang } from "@/lib/i18n";
-import { formatNumber } from "@/lib/utils";
+import { cn, formatNumber } from "@/lib/utils";
 
 interface TerritoryTrendCardProps {
   lang: Lang;
   isOpen: boolean;
   onToggle: () => void;
+  /** Width override. The card is a fixed 18rem card in the map's corner on
+   *  desktop, but stretches to fill the mobile panel stack. */
+  className?: string;
 }
 
 /**
@@ -35,9 +38,15 @@ export default function TerritoryTrendCard({
   lang,
   isOpen,
   onToggle,
+  className,
 }: TerritoryTrendCardProps) {
   return (
-    <div className="w-72 overflow-hidden rounded-2xl border border-white/12 bg-slate-900/85 shadow-2xl backdrop-blur-xl">
+    <div
+      className={cn(
+        "w-72 overflow-hidden rounded-2xl border border-white/12 bg-slate-900/85 shadow-2xl backdrop-blur-xl",
+        className
+      )}
+    >
       <button
         onClick={onToggle}
         aria-expanded={isOpen}
@@ -45,9 +54,14 @@ export default function TerritoryTrendCard({
         title={t(isOpen ? "collapse" : "expand", lang)}
         className="flex w-full items-center justify-between gap-3 px-3.5 py-2.5 text-left transition-colors hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60"
       >
-        <span className="flex min-w-0 items-center gap-1.5 text-[length:calc(11px*var(--fs))] font-semibold uppercase tracking-wider text-white/70">
+        {/* A touch smaller below lg: in the mobile stack the row is full width,
+            but the label is still long enough to clip at the desktop size, and
+            a clipped card title looks broken. Below lg it is allowed to wrap
+            rather than clip, so no phone width truncates it; the 18rem desktop
+            card is too narrow either way and keeps its original behaviour. */}
+        <span className="flex min-w-0 items-center gap-1.5 text-[length:calc(10px*var(--fs))] font-semibold uppercase leading-tight tracking-wider text-white/70 lg:text-[length:calc(11px*var(--fs))]">
           <TrendingUp className="h-3.5 w-3.5 shrink-0 text-emerald-400" />
-          <span className="truncate">{t("territoryTrend", lang)}</span>
+          <span className="lg:truncate">{t("territoryTrend", lang)}</span>
         </span>
         {isOpen ? (
           <ChevronUp className="h-3.5 w-3.5 shrink-0 text-white/40" />

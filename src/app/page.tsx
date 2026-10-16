@@ -384,7 +384,15 @@ export default function HomePage() {
               <div className="rounded-2xl border border-white/12 bg-slate-900/85 p-3.5 shadow-2xl backdrop-blur-xl md:p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <h1 className="text-[length:calc(15px*var(--fs))] font-bold leading-tight text-white md:text-lg">
+                    {/* The title must stay on ONE line on phones. Measured: its
+                        rendered width is 19 x font-size, and the space inside
+                        the card is viewport - 54px, so 15px * 1.2 (= 18px,
+                        342px wide) overflows anything under ~412px. Below md
+                        the size is therefore capped by 100vw * 0.043 — which
+                        keeps it on one line down to 320px wide — while still
+                        responding to A- / A+. From md up the header is wide
+                        enough and the original sizing returns. */}
+                    <h1 className="whitespace-nowrap text-[length:clamp(11px,calc(15px*var(--fs)),calc(100vw*0.043))] font-bold leading-tight text-white md:text-lg">
                       {t("appTitle", lang)}
                     </h1>
                     <p className="mt-0.5 text-[length:calc(10px*var(--fs))] uppercase tracking-wider text-emerald-400/90">
@@ -489,14 +497,23 @@ export default function HomePage() {
             </div>
           </div>
 
-          {/* Ranking list — desktop only */}
+          {/* Bottom panel stack. On phones and tablets these three cards form
+              one column anchored above the info button, so the ranking list and
+              the trend panel — and the ranking card's quick filters — are
+              actually reachable on mobile instead of being dropped entirely.
+              From lg up the container goes static, which lets each card return
+              to its own corner of the map via `lg:absolute`. */}
+          <div className="pointer-events-none absolute inset-x-3 bottom-12 z-20 flex flex-col gap-2 lg:static lg:inset-x-auto lg:bottom-auto">
+
+          {/* Ranking list. Full-width row in the mobile stack; its own top-right
+              card from lg up. */}
           {ranking.length > 0 && !drawerOpen && (
             <aside
               className={cn(
-                "pointer-events-auto absolute right-14 top-16 hidden w-72 flex-col overflow-hidden rounded-2xl border border-white/12 bg-slate-900/85 shadow-2xl backdrop-blur-xl lg:flex",
+                "pointer-events-auto flex w-full flex-col overflow-hidden rounded-2xl border border-white/12 bg-slate-900/85 shadow-2xl backdrop-blur-xl lg:absolute lg:right-14 lg:top-16 lg:w-72",
                 // `top-16` is the same 4rem offset the zoom/compass control uses
                 // (see .maplibregl-ctrl-top-right), so the two line up exactly.
-                listOpen && "max-h-[min(62vh,32rem)]"
+                listOpen && "max-h-[min(45vh,24rem)] lg:max-h-[min(62vh,32rem)]"
               )}
             >
               <button
@@ -727,9 +744,11 @@ export default function HomePage() {
             </aside>
           )}
 
-          {/* Legend + filters. Raised clear of the map "i" button in the
-              bottom-left corner. */}
-          <div className="pointer-events-auto absolute bottom-12 left-3 md:left-4">
+          {/* Legend + filters. A row in the mobile stack; pinned to the
+              bottom-left, raised clear of the map "i" button, from lg up.
+              No width class: the wrapper stretches as a flex item on mobile,
+              and shrink-wraps to the card once it goes absolute at lg. */}
+          <div className="pointer-events-auto lg:absolute lg:bottom-12 lg:left-4">
             <div className="rounded-2xl border border-white/12 bg-slate-900/85 shadow-2xl backdrop-blur-xl">
               <button
                 onClick={() => setLegendOpen((v) => !v)}
@@ -787,28 +806,32 @@ export default function HomePage() {
             </div>
           </div>
 
+          {/* Hong Kong-wide annual trend — a panel in its own right, deliberately
+              NOT a section of the facility drawer: EPD publishes no per-facility
+              time series, and territory totals inside a facility card read as if
+              that facility receives that waste mix. Hidden while the drawer is
+              open so the two never overlap. A row in the mobile stack; its own
+              bottom-right card from lg up. */}
+          {!drawerOpen && (
+            <div className="pointer-events-auto lg:absolute lg:bottom-3 lg:right-3">
+              <TerritoryTrendCard
+                lang={lang}
+                isOpen={trendOpen}
+                onToggle={() => setTrendOpen((v) => !v)}
+                className="w-full lg:w-72"
+              />
+            </div>
+          )}
+          </div>
+
           {/* Map "i" — holds the imagery credit and the tech explanation that
-              used to sit permanently on screen. */}
+              used to sit permanently on screen. Stays in the bottom-left corner
+              at every size, clear of the mobile panel stack. */}
           <MapInfoButton
             lang={lang}
             mapStyle={mapStyle}
             className="pointer-events-auto absolute bottom-3 left-3 z-30"
           />
-
-          {/* Hong Kong-wide annual trend — a panel in its own right, deliberately
-              NOT a section of the facility drawer: EPD publishes no per-facility
-              time series, and territory totals inside a facility card read as if
-              that facility receives that waste mix. Hidden while the drawer is
-              open so the two never overlap. */}
-          {!drawerOpen && (
-            <div className="pointer-events-auto absolute bottom-3 right-3 z-20 hidden lg:block">
-              <TerritoryTrendCard
-                lang={lang}
-                isOpen={trendOpen}
-                onToggle={() => setTrendOpen((v) => !v)}
-              />
-            </div>
-          )}
         </div>
       </div>
 
