@@ -99,6 +99,13 @@ function groupRankOf(entry: RankingEntry): number {
   return CATEGORY_GROUP_RANK[category] ?? 99;
 }
 
+/** Park logos shown in the legend in place of the colour dot. */
+const PARK_LOGO: Partial<Record<FacilityCategory, string>> = {
+  "I-PARK": "/logos/ipark1.png",
+  "O-PARK": "/logos/opark.svg",
+  "Y-PARK": "/logos/ypark.png",
+};
+
 /** A small stat readout used in the header strip. */
 function StatPill({
   label,
@@ -1055,10 +1062,18 @@ export default function HomePage() {
                           active ? "hover:bg-white/8" : "opacity-40 hover:opacity-70"
                         )}
                       >
-                        <span
-                          className="h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-white/20"
-                          style={{ backgroundColor: meta.hex }}
-                        />
+                        {PARK_LOGO[category] ? (
+                          <img
+                            src={PARK_LOGO[category]}
+                            alt=""
+                            className="h-4 w-auto max-w-[2.75rem] shrink-0 object-contain"
+                          />
+                        ) : (
+                          <span
+                            className="h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-white/20"
+                            style={{ backgroundColor: meta.hex }}
+                          />
+                        )}
                         <span className="flex-1 truncate text-[length:calc(11.5px*var(--fs))] font-medium text-white/85">
                           {lang === "zh" ? meta.labelZh : meta.labelEn}
                         </span>

@@ -113,6 +113,8 @@ export interface FacilityProperties {
   detail?: OfficialDetailRow[];
   /** Link to the EPD facility page the detail rows were transcribed from. */
   detailSourceUrl?: string;
+  /** Official site / facility page to link from the drawer (the parks). */
+  website?: string;
 
   /** Descriptive context. Prose only — contains no figures. */
   noteEn: string;
@@ -867,6 +869,8 @@ export const WASTE_FACILITIES_DATA: FacilityProperties[] = [
     throughputNoteZh: "環保署並無公布 I·PARK1 的實際處理量，只有設計處理量。",
     designCapacityTonnesPerDay: 3000,
     voidCapacityMillionM3: null,
+    website:
+      "https://www.epd.gov.hk/epd/english/environmentinhk/waste/prob_solutions/WFdev_IWMF.html",
     addressEn:
       "Artificial island adjacent to southwestern side of Shek Kwu Chau, New Territories",
     addressZh: "新界石鼓洲西南面毗鄰人工島",
@@ -895,6 +899,7 @@ export const WASTE_FACILITIES_DATA: FacilityProperties[] = [
     throughputNoteZh: "每日 200 公噸有機廢物",
     designCapacityTonnesPerDay: null,
     voidCapacityMillionM3: null,
+    website: "https://www.opark.gov.hk/en/",
     addressEn:
       "Organic Resources Recovery Centre Phase 1, 5 Sham Fung Road, Siu Ho Wan",
     addressZh: "小蠔灣深豐路5號有機資源回收中心第一期",
@@ -920,6 +925,7 @@ export const WASTE_FACILITIES_DATA: FacilityProperties[] = [
     throughputNoteZh: "Y·PARK 的處理能力約為每日 15 公噸。",
     designCapacityTonnesPerDay: null,
     voidCapacityMillionM3: null,
+    website: "https://www.ypark.hk/en/",
     addressEn: "Lung Kwu Sheung Tan, Tuen Mun, New Territories",
     addressZh: "新界屯門龍鼓上灘",
     ...EPD_CONTRACTED,

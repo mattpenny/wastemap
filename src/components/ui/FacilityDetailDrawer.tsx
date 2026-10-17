@@ -388,6 +388,18 @@ export default function FacilityDetailDrawer({
                   {t("epdFacilityPage", lang)}
                 </a>
               )}
+
+              {facility.website && (
+                <a
+                  href={facility.website}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1.5 text-[length:calc(10px*var(--fs))] text-emerald-300/70 transition-colors hover:text-emerald-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60"
+                >
+                  <ExternalLink className="h-3 w-3" />
+                  {t("officialWebsite", lang)}
+                </a>
+              )}
             </div>
           )}
         </div>

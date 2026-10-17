@@ -133,6 +133,7 @@ const DICT = {
   majorPlant: ["Major plant / equipment", "主要機器及設備"],
   otherFacilities: ["Other facilities", "其他設施"],
   epdFacilityPage: ["EPD facility page", "環保署設施頁面"],
+  officialWebsite: ["Official website", "官方網站"],
   close: ["Close", "關閉"],
   noFacilities: ["No facilities match this filter", "沒有符合篩選條件的設施"],
   language: ["Language", "語言"],
