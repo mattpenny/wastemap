@@ -33,6 +33,44 @@ failing fast if the export's own totals don't add up. Re-aggregating on
 ingest means future format tweaks stay a one-file change in
 `scripts/ingest-weighbridge.mjs`, not a re-export from the operator.
 
+### Raw export format
+
+Each file is a JSON **array** of weigh-in rows. The ingest reads only these
+keys — anything else is ignored, and `賬戶號碼` / `車牌` are never read:
+
+| Key | Example | Used for |
+|---|---|---|
+| `日期` | `"01/10/2026"` (DD/MM/YYYY) | the day the row belongs to |
+| `交收狀態` | `"完成"` | only `完成` is counted; `取消` / `拒絕` are reported in `meta.excluded` |
+| `車輛任務` | `"P99 私人車傾倒"` | the leading code (P99 / C31 / G01 / P97 / F04) picks the stream |
+| `物料重量` | `"2.39"` | tonnes (string or number) |
+| `廢物類別` | `"P01.00 商業垃圾 - 混合垃圾"` | waste-type code + description |
+| `來源` | `"15 觀塘區"` | source district code + name |
+| `StationId` | `"WKTS"` | which station |
+
+Minimal row:
+
+```json
+{
+  "日期": "01/10/2026",
+  "交收狀態": "完成",
+  "車輛任務": "P99 私人車傾倒",
+  "物料重量": "2.39",
+  "廢物類別": "P01.00 商業垃圾 - 混合垃圾",
+  "來源": "15 觀塘區",
+  "StationId": "WKTS"
+}
+```
+
+The filename does not matter to the ingest — **every** `*.json` in `data/`
+is read (case-insensitive), so use a clear convention such as
+`<station><yyyymm>.json` (`wkts202610.json`). Save as UTF-8. Do not drop
+unrelated JSON in `data/`; a non-array file is skipped with a warning.
+
+A new **station** must first be added to `STATION_TO_FACILITY` in
+`scripts/ingest-weighbridge.mjs` (currently WKTS, IETS, IWTS, STTS, NLTS,
+NWNTTS); the ingest aborts on an unknown `StationId`.
+
 ## 2. Pre-aggregate to a per-year split (live layout)
 
 `npm run ingest` (script: `scripts/ingest-weighbridge.mjs`) reads every
