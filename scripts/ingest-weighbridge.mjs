@@ -1,12 +1,21 @@
 #!/usr/bin/env node
 /**
- * Ingest raw RTS weighbridge exports into the compact aggregate the app serves.
+ * Ingest raw RTS weighbridge exports into the split aggregate the app serves.
  * -------------------------------------------------------------------------
  * Input   data/*.json — raw station weighbridge exports, one row per weigh-in.
  *         Fields used: 日期, 交收狀態, 車輛任務, 物料重量, 廢物類別, 來源,
  *         StationId. (賬戶號碼 and 車牌 are deliberately never read.)
- * Output  src/data/weighbridge.json — aggregates only, no account numbers and
- *         no licence plates, so the file is safe to commit to a public repo.
+ * Output  src/data/weighbridge/ — split layout, aggregates only (no account
+ *         numbers, no licence plates, safe to commit):
+ *
+ *           index.json              small registry: stations → years
+ *           <STATION>/meta.json     station shell: names, period, totals
+ *           <STATION>/<YEAR>.json   one calendar year: daily + year totals
+ *
+ *         The split layout means the API can answer a date-range request by
+ *         reading only the intersecting year files instead of transferring
+ *         the whole multi-year history. See `src/lib/weighbridgeServer.ts`
+ *         for the loader and `src/lib/weighbridge.ts` for the types.
  *
  * Rules, in the order they are applied:
  *   1. Keep 交收狀態 === "完成" only. 取消 / 拒絕 rows are counted and reported
@@ -38,17 +47,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, "..");
 const DATA_DIR = path.join(ROOT, "data");
-const OUT_DIR = path.join(ROOT, "src", "data", "weighbridge");
-const INDEX_FILE = path.join(OUT_DIR, "index.json");
-const STATIONS_DIR = path.join(OUT_DIR, "stations");
-const MANIFEST_FILE = path.join(ROOT, "src", "data", "weighbridge", "manifest.ts");
-
-/** Every day row the month files hold for a station, in date order. */
-function monthFilesFor(stationId) {
-  return [...monthFiles.entries()]
-    .filter(([key]) => key.startsWith(`${stationId}/`))
-    .flatMap(([, data]) => data.daily);
-}
+const OUT_ROOT = path.join(ROOT, "src", "data", "weighbridge");
 
 // ---------------------------------------------------------------------------
 // Station code -> facility id in src/data/waste-facilities.ts
@@ -352,29 +351,7 @@ for (const row of rows) {
 // ---------------------------------------------------------------------------
 // Shape the output
 // ---------------------------------------------------------------------------
-// Split per station-month instead of one file for everything:
-//
-//   index.json                   one row per station, without day detail: the
-//                                period, the totals, the stream split and the
-//                                waste-type / district splits, plus the list of
-//                                months that exist. This is what the app loads
-//                                at start-up, and its size grows with the
-//                                number of *stations*, not with the number of
-//                                days — which is what keeps a three-year search
-//                                cheap.
-//   stations/<ST>/<YYYY-MM>.json  the day rows for one month, with their own
-//                                splits. Fetched only for the station that is
-//                                actually open.
-//   manifest.ts                  static imports of every month file. A computed
-//                                import path is not traced by the bundler, so
-//                                the serverless function would not carry them.
-//
-// The month files map 1:1 onto the operator's own monthly exports, so adding a
-// month is "drop the file in and re-run the ingest" — no renumbering, no
-// rewriting of the months already ingested.
 const warnings = [];
-/** Keyed `STATION/YYYY-MM`; written out below, one file each. */
-const monthFiles = new Map();
 const out = {
   meta: {
     source:
@@ -414,48 +391,10 @@ for (const [stationId, s] of [...stations].sort(([a], [b]) => a.localeCompare(b)
   const sum = (map, pick) =>
     [...map.values()].reduce((acc, v) => acc + pick(v), 0);
 
-  // One file per calendar month, keyed off the day keys already collected.
-  const monthOf = (iso) => iso.slice(0, 7);
-  const monthKeys = [...new Set(dayKeys.map(monthOf))].sort();
-
-  for (const month of monthKeys) {
-    const rows = dayKeys
-      .filter((d) => monthOf(d) === month)
-      .map((d) => {
-        const day = s.days.get(d);
-        const split = (map) =>
-          [...map.entries()]
-            .map(([code, v]) => ({ code, tonnes: round(v.tonnes), loads: v.loads }))
-            .sort((a, b) => b.tonnes - a.tonnes);
-        return {
-          date: d,
-          tonnes: round(day.tonnes),
-          loads: day.loads,
-          private: round(day.private),
-          public: round(day.public),
-          gtw: round(day.gtw),
-          privateLoads: day.privateLoads,
-          publicLoads: day.publicLoads,
-          gtwLoads: day.gtwLoads,
-          wasteTypes: split(day.wasteTypes),
-          districts: split(day.districts),
-        };
-      });
-    monthFiles.set(`${stationId}/${month}`, {
-      stationId,
-      facilityId: s.facilityId,
-      month,
-      days: rows.length,
-      daily: rows,
-    });
-  }
-
   out.stations[stationId] = {
     stationId,
     facilityId: s.facilityId,
     period: { from, to, operatingDays },
-    /** Months on disk for this station, ascending. Drives the date picker. */
-    months: monthKeys,
     totals: {
       tonnes: round(s.totals.tonnes),
       loads: s.totals.loads,
@@ -463,6 +402,30 @@ for (const [stationId, s] of [...stations].sort(([a], [b]) => a.localeCompare(b)
       maintenanceTonnes: round(s.totals.maintenanceTonnes),
       maintenanceLoads: s.totals.maintenanceLoads,
     },
+    daily: dayKeys.map((d) => {
+      const day = s.days.get(d);
+      const split = (map) =>
+        [...map.entries()]
+          .map(([code, v]) => ({
+            code,
+            tonnes: round(v.tonnes),
+            loads: v.loads,
+          }))
+          .sort((a, b) => b.tonnes - a.tonnes);
+      return {
+        date: d,
+        tonnes: round(day.tonnes),
+        loads: day.loads,
+        private: round(day.private),
+        public: round(day.public),
+        gtw: round(day.gtw),
+        privateLoads: day.privateLoads,
+        publicLoads: day.publicLoads,
+        gtwLoads: day.gtwLoads,
+        wasteTypes: split(day.wasteTypes),
+        districts: split(day.districts),
+      };
+    }),
     streams: [...s.streams.entries()]
       .map(([key, v]) => ({
         key,
@@ -536,17 +499,14 @@ if (warnings.length > 0) {
 // ---------------------------------------------------------------------------
 const reconcileErrors = [];
 for (const st of Object.values(out.stations)) {
-  // Everything the station claims must be reproducible from the month files,
-  // which are now the only place day-level rows live.
-  const daily = monthFilesFor(st.stationId);
   const sums = {
-    "daily tonnage": daily.reduce((a, d) => a + d.tonnes, 0),
-    "daily loads": daily.reduce((a, d) => a + d.loads, 0),
-    "daily waste types": daily.reduce(
+    "daily tonnage": st.daily.reduce((a, d) => a + d.tonnes, 0),
+    "daily loads": st.daily.reduce((a, d) => a + d.loads, 0),
+    "daily waste types": st.daily.reduce(
       (a, d) => a + d.wasteTypes.reduce((x, w) => x + w.tonnes, 0),
       0
     ),
-    "daily districts": daily.reduce(
+    "daily districts": st.daily.reduce(
       (a, d) => a + d.districts.reduce((x, v) => x + v.tonnes, 0),
       0
     ),
@@ -561,25 +521,13 @@ for (const st of Object.values(out.stations)) {
     }
   }
 
-  // The month list in the index has to describe what is actually on disk, or
-  // the date picker would offer a month that cannot be loaded.
-  const onDisk = [...monthFiles.keys()]
-    .filter((key) => key.startsWith(`${st.stationId}/`))
-    .map((key) => key.split("/")[1])
-    .sort();
-  if (JSON.stringify(onDisk) !== JSON.stringify(st.months)) {
-    reconcileErrors.push(
-      `${st.stationId}: index months ${st.months.join(",")} != files on disk ${onDisk.join(",")}`
-    );
-  }
-
   // Per-stream loads, which the app re-slices but does not recompute.
   for (const stream of st.streams) {
     const key = `${stream.key}Loads`;
-    const total = daily.reduce((a, d) => a + (d[key] ?? 0), 0);
-    if (total !== stream.loads) {
+    const daily = st.daily.reduce((a, d) => a + (d[key] ?? 0), 0);
+    if (daily !== stream.loads) {
       reconcileErrors.push(
-        `${st.stationId}: daily ${stream.key} loads sum to ${total}, but the period stream has ${stream.loads}`
+        `${st.stationId}: daily ${stream.key} loads sum to ${daily}, but the period stream has ${stream.loads}`
       );
     }
   }
@@ -594,7 +542,7 @@ console.log("\nReconciled: per-day breakdowns sum to the period totals for every
 // ---------------------------------------------------------------------------
 // Safety: the aggregate must not carry any account number or licence plate.
 // ---------------------------------------------------------------------------
-const serialised = JSON.stringify(out) + JSON.stringify([...monthFiles.values()]);
+const serialised = JSON.stringify(out);
 const leaked = new Set();
 for (const row of rows) {
   for (const key of ["賬戶號碼", "車牌"]) {
@@ -611,75 +559,103 @@ if (leaked.size > 0) {
 }
 
 // ---------------------------------------------------------------------------
-// Write: index.json, one file per station-month, and the manifest that ties
-// them together for the bundler.
+// Emit the split layout
 // ---------------------------------------------------------------------------
-fs.mkdirSync(OUT_DIR, { recursive: true });
-fs.writeFileSync(INDEX_FILE, `${JSON.stringify(out, null, 2)}\n`, "utf-8");
+// The aggregate in `out` was reconciled and PII-checked above; here we just
+// partition it into the on-disk shape the server loader reads. We do NOT
+// delete the output root first — any stale year / station file from a
+// previous layout simply becomes unreferenced (the index won't list it) and
+// the loader will not read it. That keeps the write step safe under the
+// bulk-delete guard even if the layout has grown a lot.
+fs.mkdirSync(OUT_ROOT, { recursive: true });
 
-// Clear month files that are no longer backed by an input, so removing an
-// export cannot leave a stale month behind for the API to serve.
-for (const stationDir of fs.existsSync(STATIONS_DIR) ? fs.readdirSync(STATIONS_DIR) : []) {
-  const dir = path.join(STATIONS_DIR, stationDir);
-  if (!fs.statSync(dir).isDirectory()) continue;
-  for (const file of fs.readdirSync(dir)) {
-    const key = `${stationDir}/${file.replace(/\.json$/, "")}`;
-    if (!monthFiles.has(key)) fs.unlinkSync(path.join(dir, file));
+const indexStations = {};
+let totalYearFiles = 0;
+for (const stationId of Object.keys(out.stations).sort()) {
+  const st = out.stations[stationId];
+  const stationDir = path.join(OUT_ROOT, stationId);
+  fs.mkdirSync(stationDir, { recursive: true });
+
+  // Partition the station's daily rows by calendar year.
+  const byYear = new Map();
+  for (const day of st.daily) {
+    const y = day.date.slice(0, 4);
+    let arr = byYear.get(y);
+    if (!arr) {
+      arr = [];
+      byYear.set(y, arr);
+    }
+    arr.push(day);
   }
+  const years = [...byYear.keys()].sort();
+
+  // The station shell: names + period totals, no daily. Year files cover
+  // daily + year totals so a date-range request can skip the rest.
+  const meta = {
+    stationId: st.stationId,
+    facilityId: st.facilityId,
+    period: st.period,
+    streams: st.streams,
+    vehicleTasks: st.vehicleTasks,
+    wasteTypes: st.wasteTypes,
+    wasteTypesMaintenance: st.wasteTypesMaintenance,
+    districts: st.districts,
+  };
+  fs.writeFileSync(
+    path.join(stationDir, "meta.json"),
+    `${JSON.stringify(meta, null, 2)}\n`,
+    "utf-8"
+  );
+
+  for (const y of years) {
+    const days = byYear.get(y);
+    const wtTotals = new Map();
+    const distTotals = new Map();
+    for (const d of days) {
+      for (const row of d.wasteTypes) {
+        const cur = wtTotals.get(row.code) ?? { tonnes: 0, loads: 0 };
+        cur.tonnes += row.tonnes;
+        cur.loads += row.loads;
+        wtTotals.set(row.code, cur);
+      }
+      for (const row of d.districts) {
+        const cur = distTotals.get(row.code) ?? { tonnes: 0, loads: 0 };
+        cur.tonnes += row.tonnes;
+        cur.loads += row.loads;
+        distTotals.set(row.code, cur);
+      }
+    }
+    const yearFile = {
+      year: Number(y),
+      daily: days,
+      wasteTypes: [...wtTotals.entries()]
+        .map(([code, v]) => ({ code, tonnes: round(v.tonnes), loads: v.loads }))
+        .sort((a, b) => b.tonnes - a.tonnes),
+      districts: [...distTotals.entries()]
+        .map(([code, v]) => ({ code, tonnes: round(v.tonnes), loads: v.loads }))
+        .sort((a, b) => b.tonnes - a.tonnes),
+    };
+    fs.writeFileSync(
+      path.join(stationDir, `${y}.json`),
+      `${JSON.stringify(yearFile, null, 2)}\n`,
+      "utf-8"
+    );
+    totalYearFiles += 1;
+  }
+
+  indexStations[stationId] = { facilityId: st.facilityId, years };
 }
 
-let monthBytes = 0;
-for (const [key, data] of [...monthFiles].sort(([a], [b]) => a.localeCompare(b))) {
-  const [stationId, month] = key.split("/");
-  const dir = path.join(STATIONS_DIR, stationId);
-  fs.mkdirSync(dir, { recursive: true });
-  const body = `${JSON.stringify(data, null, 2)}\n`;
-  monthBytes += body.length;
-  fs.writeFileSync(path.join(dir, `${month}.json`), body, "utf-8");
-}
+const indexPayload = { meta: out.meta, stations: indexStations };
+fs.writeFileSync(
+  path.join(OUT_ROOT, "index.json"),
+  `${JSON.stringify(indexPayload, null, 2)}\n`,
+  "utf-8"
+);
 
-// The manifest exists because a computed import path is invisible to the
-// bundler: without static imports the month files would be missing from the
-// deployed function and every request for one would 404 in production.
-const manifest = [
-  "/**",
-  " * GENERATED by scripts/ingest-weighbridge.mjs — do not edit by hand.",
-  " *",
-  " * Static imports of every station-month file. The API route reads from here",
-  " * rather than from disk, so the bundler carries the data into the deployed",
-  " * function. Re-run `npm run ingest` after adding an export.",
-  " */",
-  'import type { WeighbridgeMonthFile } from "@/lib/weighbridge";',
-  "",
-  ...[...monthFiles.keys()]
-    .sort()
-    .map((key) => {
-      const [stationId, month] = key.split("/");
-      const ident = `${stationId}_${month.replace("-", "_")}`;
-      return `import ${ident} from "./stations/${stationId}/${month}.json";`;
-    }),
-  "",
-  "export const STATION_MONTHS: Record<string, Record<string, WeighbridgeMonthFile>> = {",
-  ...[...new Set([...monthFiles.keys()].map((k) => k.split("/")[0]))].sort().map((stationId) => {
-    const months = [...monthFiles.keys()]
-      .filter((k) => k.startsWith(`${stationId}/`))
-      .sort();
-    return [
-      `  ${stationId}: {`,
-      ...months.map((key) => {
-        const month = key.split("/")[1];
-        return `    "${month}": ${stationId}_${month.replace("-", "_")} as WeighbridgeMonthFile,`;
-      }),
-      "  },",
-    ].join("\n");
-  }),
-  "};",
-  "",
-].join("\n");
-fs.writeFileSync(MANIFEST_FILE, manifest, "utf-8");
-
+const stationCount = Object.keys(out.stations).length;
 console.log(
-  `\nWrote ${path.relative(ROOT, INDEX_FILE)} (${(JSON.stringify(out).length / 1024).toFixed(1)} KB) ` +
-    `and ${monthFiles.size} month file(s) (${(monthBytes / 1024).toFixed(1)} KB) — ` +
-    `no account numbers or plates.`
+  `\nWrote split layout to ${path.relative(ROOT, OUT_ROOT)}/ ` +
+    `(index + ${stationCount} station${stationCount === 1 ? "" : "s"} + ${totalYearFiles} year ` +
+    `file${totalYearFiles === 1 ? "" : "s"}) — no account numbers or plates.`
 );

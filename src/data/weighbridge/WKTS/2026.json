@@ -1,8 +1,5 @@
 {
-  "stationId": "WKTS",
-  "facilityId": "rts-west-kowloon",
-  "month": "2026-10",
-  "days": 15,
+  "year": 2026,
   "daily": [
     {
       "date": "2026-10-01",
@@ -2613,6 +2610,190 @@
           "loads": 4
         }
       ]
+    }
+  ],
+  "wasteTypes": [
+    {
+      "code": "D01.00",
+      "tonnes": 19271.82,
+      "loads": 4090
+    },
+    {
+      "code": "P01.00",
+      "tonnes": 18258.5,
+      "loads": 3432
+    },
+    {
+      "code": "S40.00",
+      "tonnes": 7526.11,
+      "loads": 848
+    },
+    {
+      "code": "P05.00",
+      "tonnes": 2053.34,
+      "loads": 1388
+    },
+    {
+      "code": "D05.00",
+      "tonnes": 1530.14,
+      "loads": 1167
+    },
+    {
+      "code": "P09.02",
+      "tonnes": 579.43,
+      "loads": 528
+    },
+    {
+      "code": "A01.00",
+      "tonnes": 225.27,
+      "loads": 30
+    },
+    {
+      "code": "P04.02",
+      "tonnes": 196.06,
+      "loads": 94
+    },
+    {
+      "code": "D03.00",
+      "tonnes": 130.83,
+      "loads": 142
+    },
+    {
+      "code": "D06.00",
+      "tonnes": 129.04,
+      "loads": 241
+    },
+    {
+      "code": "I01.00",
+      "tonnes": 63.34,
+      "loads": 10
+    },
+    {
+      "code": "P03.00",
+      "tonnes": 23.84,
+      "loads": 18
+    },
+    {
+      "code": "P07.00",
+      "tonnes": 15.32,
+      "loads": 5
+    },
+    {
+      "code": "P13.00",
+      "tonnes": 13.13,
+      "loads": 12
+    },
+    {
+      "code": "I06.00",
+      "tonnes": 8.99,
+      "loads": 5
+    },
+    {
+      "code": "D09.00",
+      "tonnes": 8.2,
+      "loads": 5
+    }
+  ],
+  "districts": [
+    {
+      "code": "31",
+      "tonnes": 8793.35,
+      "loads": 2459
+    },
+    {
+      "code": "12",
+      "tonnes": 7791.5,
+      "loads": 1969
+    },
+    {
+      "code": "11",
+      "tonnes": 7751,
+      "loads": 2213
+    },
+    {
+      "code": "13",
+      "tonnes": 6206.97,
+      "loads": 1273
+    },
+    {
+      "code": "32",
+      "tonnes": 4894.4,
+      "loads": 1130
+    },
+    {
+      "code": "14",
+      "tonnes": 4483.53,
+      "loads": 992
+    },
+    {
+      "code": "15",
+      "tonnes": 2182.06,
+      "loads": 442
+    },
+    {
+      "code": "37",
+      "tonnes": 1580.87,
+      "loads": 234
+    },
+    {
+      "code": "52",
+      "tonnes": 1125.31,
+      "loads": 232
+    },
+    {
+      "code": "34",
+      "tonnes": 879.8,
+      "loads": 121
+    },
+    {
+      "code": "36",
+      "tonnes": 763.49,
+      "loads": 105
+    },
+    {
+      "code": "38",
+      "tonnes": 736.6,
+      "loads": 222
+    },
+    {
+      "code": "33",
+      "tonnes": 638.07,
+      "loads": 157
+    },
+    {
+      "code": "22",
+      "tonnes": 530.47,
+      "loads": 83
+    },
+    {
+      "code": "35",
+      "tonnes": 504.27,
+      "loads": 86
+    },
+    {
+      "code": "21",
+      "tonnes": 428.5,
+      "loads": 102
+    },
+    {
+      "code": "41",
+      "tonnes": 206.55,
+      "loads": 72
+    },
+    {
+      "code": "51",
+      "tonnes": 185.46,
+      "loads": 49
+    },
+    {
+      "code": "24",
+      "tonnes": 177.75,
+      "loads": 38
+    },
+    {
+      "code": "23",
+      "tonnes": 173.41,
+      "loads": 36
     }
   ]
 }

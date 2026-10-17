@@ -9,6 +9,8 @@
 
 # next.js
 /.next/
+/.next-dev/
+/.next-dev.stale/
 /out/
 
 # production
@@ -46,6 +48,7 @@ next-env.d.ts
 
 # Raw station weighbridge exports. These are per-weigh-in records carrying
 # account numbers and licence plates, so they must never reach this public
-# repo. The ingest script writes an aggregate with neither, to
-# src/data/weighbridge.json, and THAT is what gets committed.
+# repo. The ingest script writes an aggregate with neither, into the split
+# layout under src/data/weighbridge/ (index.json + per-station meta.json +
+# per-year JSON), and THAT is what gets committed.
 /data/

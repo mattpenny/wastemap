@@ -1,11 +1,13 @@
 import { NextResponse } from "next/server";
+
 import {
-  WEIGHBRIDGE_DATA,
-  WEIGHBRIDGE_STATION_IDS,
-  findStationSummary,
-  findStationSummaryByFacilityId,
-  stationWithDays,
-} from "@/lib/weighbridge";
+  assembleStation,
+  listFacilityIds,
+  listStationIds,
+  loadDataset,
+  loadMeta,
+  WeighbridgeDataError,
+} from "@/lib/weighbridgeServer";
 
 /**
  * GET /api/station-data
@@ -17,23 +19,21 @@ import {
  * throughput; this one carries real measured tonnage for the stations that
  * report it. Keeping them apart stops the two sources being read as one.
  *
- * Two levels, because the data is stored per station-month and a three-year
- * search should not have to download every station to show one:
- *
- *   (no query)   the index — every station's period, totals, stream split and
- *                both ranked lists, with no day rows. Grows with the number of
- *                stations, not with the number of days recorded.
- *   ?station=    one station with its month files merged in, day rows included.
- *                Fetched only when a station's drawer is actually opened.
+ * The data is stored in a split layout under `src/data/weighbridge/`
+ * (index + per-station meta + per-year files). This route reads only the
+ * files it needs to answer the request, so a date-range query never
+ * transfers years that fall outside the window.
  *
  * Query parameters
- *   (none)                  The index: every station, without day rows
- *   ?station=WKTS           One station, by operator code, with day rows
- *   ?facility=rts-west-kowloon   One station, by map facility id, with day rows
+ *   (none)                  Every station with weighbridge coverage
+ *   ?station=WKTS           One station, by operator code
+ *   ?facility=rts-west-kowloon   One station, by map facility id
+ *   ?from=YYYY-MM-DD        Earliest day to include (inclusive)
+ *   ?to=YYYY-MM-DD          Latest day to include (inclusive)
  *   ?pretty=1               Pretty-print the JSON
  *
  * Responses
- *   200 application/json   { meta, stations } or { meta, station }
+ *   200 application/json   { meta, stations }
  *   404 application/json   Unknown station / facility, or no coverage for it
  *   500 application/json   Unexpected failure
  */
@@ -58,12 +58,19 @@ function etagFor(body: string): string {
   return `W/"${(hash >>> 0).toString(36)}-${body.length.toString(36)}"`;
 }
 
-function jsonError(status: number, code: string, message: string, extra?: Record<string, unknown>) {
+function jsonError(
+  status: number,
+  code: string,
+  message: string,
+  extra?: Record<string, unknown>
+) {
   return new NextResponse(JSON.stringify({ error: code, message, ...extra }, null, 2), {
     status,
     headers: { ...CORS_HEADERS, "Content-Type": JSON_CONTENT_TYPE },
   });
 }
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 export async function GET(request: Request) {
   try {
@@ -71,67 +78,103 @@ export async function GET(request: Request) {
     const pretty = searchParams.get("pretty") === "1";
     const stationParam = searchParams.get("station");
     const facilityParam = searchParams.get("facility");
+    const fromParam = searchParams.get("from");
+    const toParam = searchParams.get("to");
 
-    // A station query also merges its month files in, so the response is the
-    // complete station. The index alone stays small; the day rows are only
-    // ever served for one station at a time.
-    const detail = stationParam
-      ? stationWithDays(stationParam)
-      : facilityParam
-        ? findStationSummaryByFacilityId(facilityParam)?.stationId
-          ? stationWithDays(findStationSummaryByFacilityId(facilityParam)!.stationId)
-          : null
-        : null;
-
-    if (stationParam && !findStationSummary(stationParam)) {
-      return jsonError(
-        404,
-        "STATION_NOT_FOUND",
-        `No weighbridge coverage for station "${stationParam}".`,
-        { stationsWithCoverage: WEIGHBRIDGE_STATION_IDS }
-      );
+    if (fromParam && !ISO_DATE.test(fromParam)) {
+      return jsonError(400, "BAD_FROM", "`from` must be an ISO date YYYY-MM-DD.");
     }
-    if (facilityParam && !findStationSummaryByFacilityId(facilityParam)) {
-      return jsonError(
-        404,
-        "NO_WEIGHBRIDGE_COVERAGE",
-        `No weighbridge coverage for facility "${facilityParam}".`,
-        {
-          stationsWithCoverage: WEIGHBRIDGE_STATION_IDS,
-          facilitiesWithCoverage: Object.values(WEIGHBRIDGE_DATA.stations).map(
-            (s) => s.facilityId
-          ),
+    if (toParam && !ISO_DATE.test(toParam)) {
+      return jsonError(400, "BAD_TO", "`to` must be an ISO date YYYY-MM-DD.");
+    }
+
+    const meta = await loadMeta();
+
+    if (stationParam) {
+      const station = await assembleStation(stationParam, {
+        from: fromParam ?? undefined,
+        to: toParam ?? undefined,
+      });
+      if (!station) {
+        return jsonError(
+          404,
+          "STATION_NOT_FOUND",
+          `No weighbridge coverage for station "${stationParam}".`,
+          { stationsWithCoverage: await listStationIds() }
+        );
+      }
+      return respond({ meta, stations: { [station.stationId]: station } }, pretty, request);
+    }
+
+    if (facilityParam) {
+      const ids = await listStationIds();
+      let found = null;
+      for (const id of ids) {
+        const candidate = await assembleStation(id, {
+          from: fromParam ?? undefined,
+          to: toParam ?? undefined,
+        });
+        if (candidate && candidate.facilityId === facilityParam) {
+          found = candidate;
+          break;
         }
+      }
+      if (!found) {
+        return jsonError(
+          404,
+          "NO_WEIGHBRIDGE_COVERAGE",
+          `No weighbridge coverage for facility "${facilityParam}".`,
+          {
+            stationsWithCoverage: await listStationIds(),
+            facilitiesWithCoverage: await listFacilityIds(),
+          }
+        );
+      }
+      return respond({ meta, stations: { [found.stationId]: found } }, pretty, request);
+    }
+
+    // Default: every station. We still build each one through the loader so
+    // the response is shape-compatible with the old monolithic file.
+    const dataset = await loadDataset();
+    return respond(dataset, pretty, request);
+  } catch (error) {
+    if (error instanceof WeighbridgeDataError && error.code === "MISSING_FILE") {
+      console.error("[api/station-data] Data layout missing:", error.message);
+      return jsonError(
+        503,
+        "WEIGHBRIDGE_NOT_INGESTED",
+        "Weighbridge data has not been ingested yet. Run `npm run ingest`."
       );
     }
-
-    const body = JSON.stringify(
-      detail
-        ? { meta: WEIGHBRIDGE_DATA.meta, station: detail }
-        : { meta: WEIGHBRIDGE_DATA.meta, stations: WEIGHBRIDGE_DATA.stations },
-      null,
-      pretty ? 2 : 0
-    );
-    const etag = etagFor(body);
-
-    if (request.headers.get("if-none-match") === etag) {
-      return new NextResponse(null, { status: 304, headers: { ...CORS_HEADERS, ETag: etag } });
-    }
-
-    return new NextResponse(body, {
-      status: 200,
-      headers: {
-        ...CORS_HEADERS,
-        "Content-Type": JSON_CONTENT_TYPE,
-        ETag: etag,
-        // Regenerated only when a new export is ingested, so cache hard.
-        "Cache-Control": "public, s-maxage=3600, stale-while-revalidate=86400",
-      },
-    });
-  } catch (error) {
     console.error("[api/station-data] Unexpected failure:", error);
     return jsonError(500, "INTERNAL_SERVER_ERROR", "Failed to generate station data.");
   }
+}
+
+function respond(
+  payload: { meta: Awaited<ReturnType<typeof loadMeta>>; stations: Record<string, unknown> },
+  pretty: boolean,
+  request: Request
+) {
+  const body = JSON.stringify(payload, null, pretty ? 2 : 0);
+  const etag = etagFor(body);
+
+  if (request.headers.get("if-none-match") === etag) {
+    return new NextResponse(null, { status: 304, headers: { ...CORS_HEADERS, ETag: etag } });
+  }
+
+  return new NextResponse(body, {
+    status: 200,
+    headers: {
+      ...CORS_HEADERS,
+      "Content-Type": JSON_CONTENT_TYPE,
+      ETag: etag,
+      // Each split file is content-addressed by its path; the index changes
+      // only when an ingest adds/removes stations. Cache hard at the edge and
+      // let SWR serve stale-but-cheap while the origin revalidates.
+      "Cache-Control": "public, s-maxage=3600, stale-while-revalidate=86400",
+    },
+  });
 }
 
 /** CORS preflight. */

@@ -24,6 +24,7 @@ import {
 import type { DetailLabelKey, FacilityProperties } from "@/data/waste-facilities";
 import type { WeighbridgeStation } from "@/lib/weighbridge";
 import { CATEGORY_META } from "@/lib/categories";
+import { facilityBadgeStyle, facilityHex } from "@/lib/facilityColors";
 import { pick, t, type Lang } from "@/lib/i18n";
 import { cn, formatNumber } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -199,8 +200,8 @@ export default function FacilityDetailDrawer({
         <header className="shrink-0 border-b border-white/10 px-5 pb-4 pt-3 md:pt-5">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <Badge tone={meta.badgeClass} className="mb-2">
-                <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: meta.hex }} />
+              <Badge style={facilityBadgeStyle(facility)} className="mb-2">
+                <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: facilityHex(facility) }} />
                 {pick(lang, meta.labelEn, meta.labelZh)}
               </Badge>
               <h2 className="text-lg font-bold leading-tight text-white md:text-xl">
@@ -281,7 +282,7 @@ export default function FacilityDetailDrawer({
                     label={t("reportedThroughput", lang)}
                     value={throughputValue}
                     unit={facility.throughputTonnesPerDay === null ? undefined : t("tpd", lang)}
-                    accent={facility.throughputTonnesPerDay === null ? "#94a3b8" : meta.hex}
+                    accent={facility.throughputTonnesPerDay === null ? "#94a3b8" : facilityHex(facility)}
                     note={
                       facility.throughputNoteEn
                         ? pick(lang, facility.throughputNoteEn, facility.throughputNoteZh ?? undefined)
@@ -292,7 +293,7 @@ export default function FacilityDetailDrawer({
                     label={capacityLabel}
                     value={capacityValue}
                     unit={capacityUnit}
-                    accent={facility.designCapacityTonnesPerDay !== null ? meta.hex : undefined}
+                    accent={facility.designCapacityTonnesPerDay !== null ? facilityHex(facility) : undefined}
                     note={
                       facility.voidCapacityMillionM3 !== null
                         ? t("voidNotThroughput", lang)

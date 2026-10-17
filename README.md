@@ -95,10 +95,7 @@ a matter of dropping its export into `data/` and re-running the ingest.
 - Two map styles, **no API keys required**: Esri World Imagery (default) and
   the Lands Department official map, whose labels switch language with the UI.
   Setting `NEXT_PUBLIC_MAPBOX_TOKEN` optionally upgrades the satellite slot to
-  Mapbox `satellite-streets-v12`. The imagery source declares a 128px tile size
-  so the map pulls one zoom level deeper than the camera — Esri's Hong Kong
-  mosaic is coarse at z11–z12 and real aerial photography from z13 — which
-  roughly triples the opening tile load for a visibly sharper basemap.
+  Mapbox `satellite-streets-v12`.
 - Category filter chips (All / Landfills / RTS / Parks) and a legend with
   per-category counts. Both drive the same state, so they can never disagree.
 - "Reported throughput by facility" ranking, highest first, with the seven OITF
