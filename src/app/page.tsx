@@ -685,21 +685,6 @@ export default function HomePage() {
                     <p className="truncate text-[length:calc(10px*var(--fs))] uppercase tracking-wider text-emerald-400/90">
                       {t("appSubtitle", lang)}
                     </p>
-                    <button
-                      type="button"
-                      data-testid="header-detail-toggle"
-                      onClick={() => setHeaderDetailOpen((v) => !v)}
-                      aria-expanded={headerDetailOpen}
-                      aria-label={t(headerDetailOpen ? "collapse" : "expand", lang)}
-                      title={t("facilityFigures", lang)}
-                      className="-my-1 grid h-5 w-5 shrink-0 place-items-center rounded-full text-emerald-400/70 transition-colors hover:bg-white/10 hover:text-emerald-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60 md:hidden"
-                    >
-                      {headerDetailOpen ? (
-                        <ChevronUp className="h-3.5 w-3.5" />
-                      ) : (
-                        <ChevronDown className="h-3.5 w-3.5" />
-                      )}
-                    </button>
                   </div>
 
                   {/* Display toolbar, collapsed to this pill by default on
@@ -726,31 +711,6 @@ export default function HomePage() {
                   </button>
                 </div>
 
-                {/* Facility figures. Phone only, and only once the chevron
-                    above is tapped — the opening view is the title and nothing
-                    else. The inter-stat gap is deliberately much wider than
-                    the label/value gap inside a stat (4px), so where one figure
-                    ends and the next begins is unambiguous even when the row
-                    wraps to a second line. */}
-                {headerDetailOpen && (
-                  <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-white/10 pt-2 md:hidden">
-                    <CompactStat
-                      label={t("facilities", lang)}
-                      value={String(stats.count)}
-                    />
-                    <CompactStat
-                      label={t("publishedRates", lang)}
-                      value={`${stats.withPublishedThroughput}/${stats.count}`}
-                      accent="#10b981"
-                    />
-                    <CompactStat
-                      label={t("noSiteRate", lang)}
-                      value={String(stats.withoutSiteThroughput)}
-                      accent="#f59e0b"
-                    />
-                  </div>
-                )}
-
                 {/* Display toolbar, phone only, behind the pill above. */}
                 {controlsOpen && (
                   <div
@@ -760,22 +720,6 @@ export default function HomePage() {
                     {renderControls()}
                   </div>
                 )}
-
-                {/* From md up the figures are always on, as a three-column
-                    grid — there is room for them, and nothing to hide. */}
-                <div className="mt-3 hidden grid-cols-3 gap-3 border-t border-white/10 pt-3 md:grid">
-                  <StatPill label={t("facilities", lang)} value={String(stats.count)} />
-                  <StatPill
-                    label={t("publishedRates", lang)}
-                    value={`${stats.withPublishedThroughput}/${stats.count}`}
-                    accent="#10b981"
-                  />
-                  <StatPill
-                    label={t("noSiteRate", lang)}
-                    value={String(stats.withoutSiteThroughput)}
-                    accent="#f59e0b"
-                  />
-                </div>
 
                 {error && (
                   <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-500/25 bg-red-500/10 px-2.5 py-2">
@@ -915,10 +859,6 @@ export default function HomePage() {
                             >
                               <div className="flex items-center justify-between gap-2">
                                 <span className="flex min-w-0 items-center gap-1.5">
-                                  <span
-                                    className="h-1.5 w-1.5 shrink-0 rounded-full"
-                                    style={{ backgroundColor: facilityHex(entry.facilities[0]) }}
-                                  />
                                   <ScrollingName
                                     className="text-[length:calc(11.5px*var(--fs))] font-medium text-white/85"
                                     text={lang === "zh" ? entry.nameZh : entry.nameEn}
@@ -929,8 +869,7 @@ export default function HomePage() {
                                 </span>
                                 <span className="flex shrink-0 items-center gap-1">
                                   <span
-                                    className="text-[length:calc(11px*var(--fs))] font-bold tabular-nums"
-                                    style={{ color: meta.hex }}
+                                    className="text-[length:calc(11px*var(--fs))] font-bold tabular-nums text-white/85"
                                     title={
                                       lang === "zh"
                                         ? entry.totalNoteZh ?? undefined
@@ -956,11 +895,8 @@ export default function HomePage() {
                               {entry.total !== null && (
                                 <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-white/8">
                                   <div
-                                    className="h-full rounded-full transition-all duration-500"
-                                    style={{
-                                      width: `${(entry.total / maxRankingIntake) * 100}%`,
-                                      backgroundColor: meta.hex,
-                                    }}
+                                    className="h-full rounded-full bg-emerald-400/60 transition-all duration-500"
+                                    style={{ width: `${(entry.total / maxRankingIntake) * 100}%` }}
                                   />
                                 </div>
                               )}
@@ -1021,18 +957,13 @@ export default function HomePage() {
                           >
                             <div className="flex items-center justify-between gap-2">
                               <span className="flex min-w-0 items-center gap-1.5">
-                                <span
-                                  className="h-1.5 w-1.5 shrink-0 rounded-full"
-                                  style={{ backgroundColor: facilityHex(facility) }}
-                                />
                                 <ScrollingName
                                   className="text-[length:calc(11.5px*var(--fs))] font-medium text-white/85"
                                   text={lang === "zh" ? facility.nameZh : facility.nameEn}
                                 />
                               </span>
                               <span
-                                className="shrink-0 text-[length:calc(11px*var(--fs))] font-bold tabular-nums"
-                                style={{ color: accent }}
+                                className="shrink-0 text-[length:calc(11px*var(--fs))] font-bold tabular-nums text-white/85"
                                 title={
                                   lang === "zh"
                                     ? facility.throughputNoteZh ?? undefined
@@ -1047,11 +978,8 @@ export default function HomePage() {
                             {entry.total !== null && (
                               <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-white/8">
                                 <div
-                                  className="h-full rounded-full transition-all duration-500"
-                                  style={{
-                                    width: `${(entry.total / maxRankingIntake) * 100}%`,
-                                    backgroundColor: accent,
-                                  }}
+                                  className="h-full rounded-full bg-emerald-400/60 transition-all duration-500"
+                                  style={{ width: `${(entry.total / maxRankingIntake) * 100}%` }}
                                 />
                               </div>
                             )}
