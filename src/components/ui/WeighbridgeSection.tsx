@@ -42,13 +42,13 @@ const STREAM_LABEL_KEY: Record<StreamKey, "streamPrivate" | "streamPublic" | "st
 };
 
 /**
- * One colour per source district.
+ * One colour per ranked row (source district and waste type).
  *
  * Ranked rather than hashed: the palette follows the sort order, so the
- * largest source is always the same colour and no two neighbouring rows can
+ * largest row is always the same colour and no two neighbouring rows can
  * collide onto the same hue.
  */
-const DISTRICT_COLORS = [
+const RANK_COLORS = [
   "#60a5fa",
   "#34d399",
   "#fbbf24",
@@ -687,7 +687,7 @@ export default function WeighbridgeSection({
           scaleToMax
           lang={lang}
           testId="wb-waste-types"
-          render={(w, share, barShare) => (
+          render={(w, share, barShare, rank) => (
             <RankedBar
               key={w.code}
               label={pick(lang, w.nameEn, w.nameZh)}
@@ -698,7 +698,7 @@ export default function WeighbridgeSection({
               loadsUnit={loadUnit}
               share={share}
               barShare={barShare}
-              color="#94a3b8"
+              color={RANK_COLORS[rank % RANK_COLORS.length]}
             />
           )}
         />
@@ -725,7 +725,7 @@ export default function WeighbridgeSection({
               loadsUnit={loadUnit}
               share={share}
               barShare={barShare}
-              color={DISTRICT_COLORS[rank % DISTRICT_COLORS.length]}
+              color={RANK_COLORS[rank % RANK_COLORS.length]}
             />
           )}
         />
