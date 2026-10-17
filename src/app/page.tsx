@@ -81,6 +81,24 @@ type RankingEntry =
       totalNoteZh: string | null;
     };
 
+/**
+ * Category grouping order for the ranking card: RTS first, then Landfills,
+ * then the parks (I/O/Y-PARK). Shared by the sort and the group separators so
+ * the two can never disagree.
+ */
+const CATEGORY_GROUP_RANK: Record<string, number> = {
+  RTS: 0,
+  Landfill: 1,
+  "I-PARK": 2,
+  "O-PARK": 2,
+  "Y-PARK": 2,
+};
+function groupRankOf(entry: RankingEntry): number {
+  const category =
+    entry.kind === "facility" ? entry.facility.category : entry.facilities[0].category;
+  return CATEGORY_GROUP_RANK[category] ?? 99;
+}
+
 /** A small stat readout used in the header strip. */
 function StatPill({
   label,
@@ -416,19 +434,9 @@ export default function HomePage() {
     // Group order: RTS first, then Landfills, then the parks (I/O/Y-PARK).
     // Within a group, highest throughput first. `total` is the published
     // throughput (MSW tonnes/day) the card already plots; nulls sort last.
-    const groupRank: Record<string, number> = {
-      RTS: 0,
-      Landfill: 1,
-      "I-PARK": 2,
-      "O-PARK": 2,
-      "Y-PARK": 2,
-    };
-    const rankOf = (e: RankingEntry) =>
-      groupRank[e.kind === "facility" ? e.facility.category : e.facilities[0].category] ?? 99;
-
     return entries.sort((a, b) => {
-      const ga = rankOf(a);
-      const gb = rankOf(b);
+      const ga = groupRankOf(a);
+      const gb = groupRankOf(b);
       if (ga !== gb) return ga - gb;
       return (b.total ?? -1) - (a.total ?? -1);
     });
@@ -821,13 +829,18 @@ export default function HomePage() {
                   </div>
 
                   <ul className="thin-scrollbar flex-1 overflow-y-auto p-1.5">
-                    {ranking.map((entry) => {
+                    {ranking.map((entry, index) => {
+                      const showGroupDivider =
+                        index > 0 && groupRankOf(entry) !== groupRankOf(ranking[index - 1]);
                       /* ---- Collapsed group (e.g. the seven OITF sites) ---- */
                       if (entry.kind === "group") {
                         const meta = CATEGORY_META[entry.facilities[0].category];
                         const isExpanded = expandedGroups.includes(entry.code);
                         return (
-                          <li key={entry.id}>
+                          <li
+                            key={entry.id}
+                            className={cn(showGroupDivider && "mt-2 border-t-2 border-white/20 pt-2")}
+                          >
                             <button
                               onClick={(e) => {
                                 const li = e.currentTarget.closest("li");
@@ -947,7 +960,10 @@ export default function HomePage() {
                       const accent = meta.hex;
                       const isActive = selectedId === facility.id;
                       return (
-                        <li key={entry.id}>
+                        <li
+                          key={entry.id}
+                          className={cn(showGroupDivider && "mt-2 border-t-2 border-white/20 pt-2")}
+                        >
                           <button
                             onClick={() => selectFromList(facility)}
                             className={cn(

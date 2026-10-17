@@ -11,7 +11,7 @@ import {
 } from "react";
 import maplibregl, { type Map as MapLibreMap } from "maplibre-gl";
 import { MapboxOverlay } from "@deck.gl/mapbox";
-import { ColumnLayer, IconLayer, ScatterplotLayer } from "@deck.gl/layers";
+import { ColumnLayer, IconLayer, ScatterplotLayer, TextLayer } from "@deck.gl/layers";
 import { AmbientLight, DirectionalLight, LightingEffect } from "@deck.gl/core";
 import type { PickingInfo } from "@deck.gl/core";
 
@@ -113,6 +113,27 @@ function pinFor(hex: string): string {
 }
 
 const PIN_ICON_SIZE = { width: 64, height: 80, anchorX: 32, anchorY: 80 };
+
+/**
+ * Short label shown above a pillar.
+ *
+ * Uses the parenthesised abbreviation where the name has one (WKTS, WENT), the
+ * park prefix (I·PARK1 → I-PARK1), or the place name with the facility-type
+ * phrase stripped (Mui Wo Transfer Facility → Mui Wo). Deliberately ASCII so it
+ * renders in deck.gl's default text atlas, which has no CJK glyphs — the full
+ * bilingual name stays in the tooltip and drawer.
+ */
+function shortName(f: FacilityProperties): string {
+  const en = f.nameEn;
+  const park = en.match(/^([IOY])·PARK(\d*)/);
+  if (park) return `${park[1]}-PARK${park[2]}`;
+  const abbr = en.match(/\(([A-Z]{2,8})\)\s*$/);
+  if (abbr) return abbr[1];
+  const stripped = en
+    .replace(/\s*(Transfer Facility|Transfer Station|Landfill|Refuse Transfer Station)\s*$/i, "")
+    .trim();
+  return stripped || en;
+}
 
 /** One-time lighting rig — without it the extruded columns read as flat shapes. */
 const lightingEffect = new LightingEffect({
@@ -301,8 +322,35 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
         })
       : null;
 
-    return [baseLayer, ...columnLayers, ...(pinLayer ? [pinLayer] : [])];
-  }, [shown, selectedId, heightFor, elevationScale]);
+    // Short name above each pillar, sitting at the column's top (height ×
+    // elevationScale) so it rides up with the column. Pixel size grows a
+    // little with zoom so the labels stay readable when you fly in.
+    const labelSize = Math.max(10, Math.min(16, 10 + (zoom - HK_ZOOM) * 1.5));
+    const labelLayer = new TextLayer<FacilityProperties>({
+      id: "facility-label",
+      data: columnData,
+      pickable: false,
+      billboard: true,
+      sizeUnits: "pixels",
+      getPosition: (d) => [
+        d.coordinates[0],
+        d.coordinates[1],
+        heightFor(d) * elevationScale + 180,
+      ],
+      getText: (d) => shortName(d),
+      getSize: labelSize,
+      getColor: [255, 255, 255, 255],
+      getTextAnchor: "middle",
+      getAlignmentBaseline: "bottom",
+      getPixelOffset: [0, -4],
+      fontFamily: "monospace",
+      background: true,
+      getBackgroundColor: [10, 18, 30, 210],
+      backgroundPadding: [5, 2],
+    });
+
+    return [baseLayer, ...columnLayers, ...(pinLayer ? [pinLayer] : []), labelLayer];
+  }, [shown, selectedId, heightFor, elevationScale, zoom]);
 
   // ------------------------------------------------------------------
   // Initialise the map exactly once
