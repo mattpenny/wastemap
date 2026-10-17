@@ -1,14 +1,5 @@
 import type { StyleSpecification } from "maplibre-gl";
 
-// Sea mask: Natural Earth 1:10m ocean clipped to the HK bbox (built by
-// scripts/_clip-sea.py). The Esri World Imagery water mosaic has baked-in
-// tone seams (different satellite passes), so we paint a flat sea colour over
-// the water on the satellite style. Land keeps the imagery.
-import HK_SEA from "@/data/hk-sea.json";
-
-/** Flat sea colour for the water mask. */
-const SEA_COLOR = "#163f5e";
-
 /**
  * Basemap definitions.
  *
@@ -136,11 +127,6 @@ export function satelliteStyle(): StyleSpecification {
         tileSize: 256,
         maxzoom: 19,
       },
-      // Water polygon (sea only) used to paint a flat ocean over the imagery.
-      hkSea: {
-        type: "geojson",
-        data: HK_SEA as unknown as GeoJSON.GeoJSON,
-      },
     },
     layers: [
       {
@@ -185,14 +171,6 @@ export function satelliteStyle(): StyleSpecification {
           "raster-brightness-max": 1,
           "raster-contrast": ["interpolate", ["linear"], ["zoom"], 9.5, -0.2, 12.5, 0],
         },
-      },
-      {
-        // Flat sea painted over the imagery to hide the Esri water-mosaic
-        // seams. Sits above the raster, below the place labels.
-        id: "sea-mask",
-        type: "fill",
-        source: "hkSea",
-        paint: { "fill-color": SEA_COLOR, "fill-opacity": 0.96 },
       },
       {
         id: "places",
