@@ -76,10 +76,10 @@ const MAX_HEIGHT_M = 2000;
  */
 const CATEGORY_RADIUS_M: Record<FacilityCategory, number> = {
   Landfill: 620,
-  "I-PARK": 230,
+  "I-PARK": 340,
   RTS: 340,
-  "O-PARK": 230,
-  "Y-PARK": 230,
+  "O-PARK": 340,
+  "Y-PARK": 340,
 };
 
 /** Size of the map pin, in screen pixels (constant regardless of zoom). */
