@@ -413,7 +413,25 @@ export default function HomePage() {
       }),
     ];
 
-    return entries.sort((a, b) => (b.total ?? -1) - (a.total ?? -1));
+    // Group order: RTS first, then Landfills, then the parks (I/O/Y-PARK).
+    // Within a group, highest throughput first. `total` is the published
+    // throughput (MSW tonnes/day) the card already plots; nulls sort last.
+    const groupRank: Record<string, number> = {
+      RTS: 0,
+      Landfill: 1,
+      "I-PARK": 2,
+      "O-PARK": 2,
+      "Y-PARK": 2,
+    };
+    const rankOf = (e: RankingEntry) =>
+      groupRank[e.kind === "facility" ? e.facility.category : e.facilities[0].category] ?? 99;
+
+    return entries.sort((a, b) => {
+      const ga = rankOf(a);
+      const gb = rankOf(b);
+      if (ga !== gb) return ga - gb;
+      return (b.total ?? -1) - (a.total ?? -1);
+    });
   }, [visibleFacilities]);
 
   const maxRankingIntake = Math.max(1, ...ranking.map((entry) => entry.total ?? 0));
@@ -808,12 +826,9 @@ export default function HomePage() {
                 listOpen
                   ? "flex max-h-[46vh] rounded-t-2xl border-b-0"
                   : "hidden",
-                // Desktop: its own card, vertically centred on the right edge.
-                // It used to sit at `top-16` to line up with the zoom/compass
-                // control, but the user asked for it to be moved down and
-                // centred instead. `top-1/2` + `-translate-y-1/2` keeps it
-                // centred whether it is collapsed (header only) or expanded.
-                "lg:absolute lg:right-14 lg:top-1/2 lg:-translate-y-1/2 lg:flex lg:w-72 lg:rounded-2xl lg:border-b",
+                // Desktop: its own card, back at the top under the display
+                // toolbar (the user reverted the centred placement).
+                "lg:absolute lg:right-14 lg:top-16 lg:flex lg:w-72 lg:rounded-2xl lg:border-b",
                 listOpen && "lg:max-h-[min(62vh,32rem)]"
               )}
             >
@@ -1059,7 +1074,7 @@ export default function HomePage() {
             className={cn(
               "pointer-events-auto w-full",
               legendOpen ? "block" : "hidden",
-              "lg:absolute lg:bottom-12 lg:left-4 lg:block lg:w-auto"
+              "lg:absolute lg:bottom-4 lg:left-4 lg:block lg:w-auto"
             )}
           >
             <div className="max-h-[46vh] overflow-y-auto rounded-t-2xl border border-b-0 border-white/12 bg-slate-900/85 shadow-2xl backdrop-blur-xl lg:max-h-none lg:rounded-2xl lg:border-b">
@@ -1149,7 +1164,7 @@ export default function HomePage() {
             <MapInfoButton
               lang={lang}
               mapStyle={mapStyle}
-              className="shrink-0 lg:absolute lg:bottom-3 lg:left-3 lg:z-30"
+              className="flex w-11 shrink-0 items-center justify-center lg:absolute lg:bottom-4 lg:right-4 lg:z-30"
             />
           </div>
           </div>
