@@ -9,7 +9,9 @@ import { cn } from "@/lib/utils";
  * Used in the ranking cards where long English facility names ("West New
  * Territories Landfill (WENT)") would otherwise be clipped. At rest it behaves
  * like `truncate` (start shown, overflow hidden); on hover, if the text is
- * wider than its box, it scrolls left so the tail becomes readable, then loops.
+ * wider than its box, it scrolls left to reveal the tail and then holds there
+ * (one-shot, `fill-mode: forwards`) — it does NOT snap back to the start, which
+ * read as a glitch. Moving the pointer away resets it.
  */
 export default function ScrollingName({
   text,

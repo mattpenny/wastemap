@@ -107,6 +107,14 @@ export function satelliteStyle(): StyleSpecification {
         // note on the `satellite` layer below. MapLibre then fetches one zoom
         // level deeper and 2x supersamples, which pulls the sharp, bright z13+
         // aerial instead of the dark coarse z11/z12 mosaic.
+        //
+        // NOTE: this only fixes LAND sharpness. The large, tone-shifted
+        // parallelograms over the water are baked into Esri's World Imagery
+        // source itself (adjacent mosaic tiles are different satellite passes
+        // — one overcast/grey, one clear/teal). Verified by exporting the raw
+        // Esri image for the harbour with no app code involved: the seam is in
+        // the source pixels. Fetching deeper zooms (tileSize 64 → z14) does not
+        // remove it, so 128 is kept as the perf/sharpness balance.
         tileSize: 128,
         maxzoom: 19,
         attribution: ESRI_ATTRIBUTION,

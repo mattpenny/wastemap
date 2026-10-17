@@ -808,10 +808,12 @@ export default function HomePage() {
                 listOpen
                   ? "flex max-h-[46vh] rounded-t-2xl border-b-0"
                   : "hidden",
-                // Desktop: its own top-right card.
-                "lg:absolute lg:right-14 lg:top-16 lg:flex lg:w-72 lg:rounded-2xl lg:border-b",
-                // `top-16` is the same 4rem offset the zoom/compass control uses
-                // (see .maplibregl-ctrl-top-right), so the two line up exactly.
+                // Desktop: its own card, vertically centred on the right edge.
+                // It used to sit at `top-16` to line up with the zoom/compass
+                // control, but the user asked for it to be moved down and
+                // centred instead. `top-1/2` + `-translate-y-1/2` keeps it
+                // centred whether it is collapsed (header only) or expanded.
+                "lg:absolute lg:right-14 lg:top-1/2 lg:-translate-y-1/2 lg:flex lg:w-72 lg:rounded-2xl lg:border-b",
                 listOpen && "lg:max-h-[min(62vh,32rem)]"
               )}
             >
