@@ -54,6 +54,27 @@ export function facilityRgb(f: FacilityColourRef): [number, number, number] {
   return hexToRgb(facilityHex(f));
 }
 
+/**
+ * Three group colours for the map: Landfills red, RTS orange, and every park
+ * purple. The map pillars/discs use these so the three groups read at a glance;
+ * the drawer still uses the per-facility `facilityHex`.
+ */
+const GROUP_HEX: Record<FacilityCategory, string> = {
+  Landfill: "#dc2626",
+  RTS: "#ea580c",
+  "I-PARK": "#8b5cf6",
+  "O-PARK": "#8b5cf6",
+  "Y-PARK": "#8b5cf6",
+};
+
+export function groupHex(f: FacilityColourRef): string {
+  return GROUP_HEX[f.category] ?? CATEGORY_META[f.category].hex;
+}
+
+export function groupRgb(f: FacilityColourRef): [number, number, number] {
+  return hexToRgb(groupHex(f));
+}
+
 /** `rgba(r, g, b, a)` helper for translucent DOM fills (dots, badges). */
 export function rgbaFor(hex: string, alpha: number): string {
   const [r, g, b] = hexToRgb(hex);
