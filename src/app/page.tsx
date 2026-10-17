@@ -611,7 +611,14 @@ export default function HomePage() {
       {/* ---------------- Map column ---------------- */}
       <div
         className={cn(
-          "absolute inset-0 transition-[margin] duration-300 [transition-timing-function:cubic-bezier(0.32,0.72,0,1)]",
+          // No margin transition here on purpose. When the drawer opens this
+          // element's width changes and the ResizeObserver in WasteMap3D calls
+          // map.resize(). A CSS margin animation fires that observer on every
+          // frame for 300ms, and each WebGL buffer realloc flashes the map —
+          // worst right after a zoom, when many deep-zoom tiles are resident.
+          // Keep the change instantaneous so it is one clean resize, not a
+          // per-frame realloc storm.
+          "absolute inset-0",
           drawerOpen && "lg:mr-[26rem]"
         )}
       >
@@ -1124,7 +1131,7 @@ export default function HomePage() {
               active={listOpen}
               onClick={() => toggleDockPanel("list")}
               icon={<Layers className="h-4 w-4" />}
-              label={t("dockRanking", lang)}
+              label={t("dockFacility", lang)}
             />
             <DockTab
               name="legend"

@@ -38,7 +38,7 @@ export default function ScrollingName({
   const dist =
     ref.current && overflow ? ref.current.scrollWidth - ref.current.clientWidth : 0;
   // Scroll speed scales with how much is hidden; clamp to a readable range.
-  const duration = Math.min(12, Math.max(3, dist / 35));
+  const duration = Math.min(12, Math.max(4, dist / 18));
 
   return (
     <span

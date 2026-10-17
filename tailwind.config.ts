@@ -85,8 +85,10 @@ const config: Config = {
           from: { opacity: "0" },
           to: { opacity: "1" },
         },
-        // Hover marquee for truncated facility names: scroll left by the exact
-        // overflow distance (set as --marquee-dist) so the hidden tail reveals.
+        // One-shot hover reveal for truncated facility names: scroll left by the
+        // exact overflow distance (set as --marquee-dist) so the hidden tail
+        // reveals, then hold. Deliberately NOT an infinite wrapping loop — the
+        // snap-back-to-start of a classic marquee reads as a glitch, not motion.
         "marquee": {
           from: { transform: "translateX(0)" },
           to: { transform: "translateX(var(--marquee-dist, 0))" },
@@ -97,7 +99,7 @@ const config: Config = {
         "slide-in-bottom":
           "slide-in-bottom 0.32s cubic-bezier(0.32, 0.72, 0, 1)",
         "fade-in": "fade-in 0.2s ease-out",
-        "marquee": "marquee linear infinite",
+        "marquee": "marquee 6s cubic-bezier(0.22, 1, 0.36, 1) forwards",
       },
     },
   },

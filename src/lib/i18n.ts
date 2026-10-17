@@ -21,7 +21,7 @@ const DICT = {
   // Short labels for the phone bottom dock. The full card titles ("Reported
   // throughput by facility", "Hong Kong-wide annual waste disposal") are far
   // too long to sit side by side in a tab bar.
-  dockRanking: ["Ranking", "排名"],
+  dockFacility: ["Facility", "設施"],
   dockLegend: ["Legend", "圖例"],
   dockTrend: ["Trend", "趨勢"],
   notPublished: ["N/A", "未公布"],
