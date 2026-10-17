@@ -1,5 +1,8 @@
 import type { StyleSpecification } from "maplibre-gl";
 
+/** Flat sea colour for the water mask. */
+const SEA_COLOR = "#1a4a60";
+
 /**
  * Basemap definitions.
  *
@@ -127,6 +130,15 @@ export function satelliteStyle(): StyleSpecification {
         tileSize: 256,
         maxzoom: 19,
       },
+      // High-resolution OSM water polygons (OpenFreeMap, key-less) used to
+      // paint a flat sea over the imagery. `url` fetches the TileJSON, which
+      // carries the versioned tile template; maxzoom 12 keeps tiles light
+      // (overzoomed above z12, plenty for a flat sea).
+      openmaptiles: {
+        type: "vector",
+        url: "https://tiles.openfreemap.org/planet",
+        maxzoom: 12,
+      },
     },
     layers: [
       {
@@ -171,6 +183,15 @@ export function satelliteStyle(): StyleSpecification {
           "raster-brightness-max": 1,
           "raster-contrast": ["interpolate", ["linear"], ["zoom"], 9.5, -0.2, 12.5, 0],
         },
+      },
+      {
+        // Flat sea painted from OSM's high-res water polygons, hiding the Esri
+        // water-mosaic seams. Above the raster, below the place labels.
+        id: "sea-mask",
+        type: "fill",
+        source: "openmaptiles",
+        "source-layer": "water",
+        paint: { "fill-color": SEA_COLOR, "fill-opacity": 1 },
       },
       {
         id: "places",

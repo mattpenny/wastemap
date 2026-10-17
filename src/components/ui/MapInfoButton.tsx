@@ -56,14 +56,14 @@ export default function MapInfoButton({
 
   return (
     <div ref={containerRef} data-testid="map-info" className={cn("relative", className)}>
-      {/* Popover — opens upward from the button. Anchored to the right edge on
-          phones, where the button sits at the right end of the bottom dock;
-          back to the left edge from lg up, where the button is bottom-left. */}
+      {/* Popover — opens upward from the button, anchored to its RIGHT edge so
+          it stays on-screen now that the button sits at the bottom-right
+          (desktop) and at the right end of the dock (phones). */}
       {open && (
         <div
           role="dialog"
           aria-label={t("infoTitle", lang)}
-          className="absolute bottom-full right-0 mb-2 w-[min(22rem,calc(100vw-1.5rem))] origin-bottom-right animate-fade-in overflow-hidden rounded-2xl border border-white/12 bg-slate-900/95 shadow-2xl backdrop-blur-xl lg:left-0 lg:right-auto lg:origin-bottom-left"
+          className="absolute bottom-full right-0 mb-2 w-[min(22rem,calc(100vw-1.5rem))] origin-bottom-right animate-fade-in overflow-hidden rounded-2xl border border-white/12 bg-slate-900/95 shadow-2xl backdrop-blur-xl"
         >
           <div className="flex items-center justify-between border-b border-white/10 px-3.5 py-2.5">
             <h2 className="text-[length:calc(11px*var(--fs))] font-semibold uppercase tracking-wider text-white/70">
