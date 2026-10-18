@@ -187,13 +187,41 @@ export function satelliteStyle(): StyleSpecification {
         },
       },
       {
-        // Flat sea painted from OSM's high-res water polygons, hiding the Esri
-        // water-mosaic seams. Above the raster, below the place labels.
+        // Sea painted from OSM's high-res water polygons.
+        //
+        // The paint used to be a permanently opaque tone because Esri's low-zoom
+        // ocean mosaic over the harbour is dark and tone-shifted — adjacent tiles
+        // are different satellite passes, so the wide view shows near-black
+        // parallelograms over the water (measured: mean luma ~60 with ~15%
+        // near-black pixels at z10 vs ~94 and 0% at z14 — see
+        // out/verify/tiles/). That dark water is the "shadow" the mask hides.
+        //
+        // A permanently opaque mask throws the natural sea away though, so the
+        // fill now fades out with camera zoom: near-opaque at the overview
+        // (z10–z11, where the mosaic is at its worst), thin from z13 (Esri's
+        // harbour water is already clean by then) and gone by z14.5 — from there
+        // the bright, uniform high-res aerial shows through and the sea reads as
+        // real satellite water instead of a colour fill.
         id: "sea-mask",
         type: "fill",
         source: "openmaptiles",
         "source-layer": "water",
-        paint: { "fill-color": SEA_COLOR, "fill-opacity": 1 },
+        paint: {
+          "fill-color": SEA_COLOR,
+          "fill-opacity": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            10,
+            0.97,
+            11.5,
+            0.93,
+            13,
+            0.6,
+            14.5,
+            0,
+          ],
+        },
       },
       {
         id: "places",
