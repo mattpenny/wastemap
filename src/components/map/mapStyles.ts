@@ -168,6 +168,13 @@ export function satelliteStyle(): StyleSpecification {
         tileSize: 256,
         maxzoom: 19,
       },
+      // OSM water polygons (OpenFreeMap, key-less) — used to *tint* the sea, not
+      // to replace it. See the `sea-tint` layer for why this is still needed.
+      openmaptiles: {
+        type: "vector",
+        url: "https://tiles.openfreemap.org/planet",
+        maxzoom: 12,
+      },
     },
     layers: [
       {
@@ -244,6 +251,44 @@ export function satelliteStyle(): StyleSpecification {
           // each 256px image into half the area — 2x supersampling, which is
           // what keeps the aerial crisp at the zooms people actually read.
           "raster-opacity": ["interpolate", ["linear"], ["zoom"], 13.5, 0, 14.5, 1],
+        },
+      },
+      {
+        // Esri's z10–z12 ocean over Hong Kong is a poor mosaic: measured on the
+        // raw tiles (out/tilediag/), z9 is clean, z10 has faint cloud shadow,
+        // z11 has large soft-edged dark blobs and z12 is almost black over deep
+        // water. Those blobs are in the source pixels, so no tone curve removes
+        // them without washing out the land with them.
+        //
+        // A tint over the water is the honest fix: it pulls the shadowed and
+        // clean patches towards one sea tone while leaving ~40% of the imagery
+        // in place, so the sea still has depth and texture. It is deliberately
+        // much lighter than the old 0.97 mask, which replaced the sea outright
+        // (that was the "one colour tone layer" complaint). 0.58 was chosen by
+        // eye against the panned-south view in out/seashots/pan-*: at 0.7 the
+        // shadows are gone but the sea flattens, at 0.45 they read as blobs.
+        //
+        // Banded, because the defect is banded: mild at z9, worst z10–13.5, and
+        // gone by z14.5 where Esri's water is clean.
+        id: "sea-tint",
+        type: "fill",
+        source: "openmaptiles",
+        "source-layer": "water",
+        paint: {
+          "fill-color": SEA_COLOR,
+          "fill-opacity": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            9,
+            0.45,
+            10.5,
+            0.58,
+            13.5,
+            0.58,
+            14.5,
+            0,
+          ],
         },
       },
       {
