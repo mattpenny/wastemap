@@ -19,6 +19,7 @@ import type { FacilityCategory, FacilityProperties } from "@/data/waste-faciliti
 import { CATEGORY_META, CATEGORY_ORDER } from "@/lib/categories";
 import { groupHex, groupRgb } from "@/lib/facilityColors";
 import { t, type Lang } from "@/lib/i18n";
+import { prefetchUnderlayTiles } from "@/lib/prefetchBasemap";
 import { formatNumber } from "@/lib/utils";
 import {
   HK_BEARING,
@@ -518,7 +519,13 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
     overlayRef.current = overlay;
     map.addControl(overlay as unknown as maplibregl.IControl);
 
-    map.on("load", () => setReady(true));
+    map.on("load", () => {
+      setReady(true);
+      // Warm the browser cache with the coarse underlay tiles so a later
+      // zoom-out from a facility is gap-free from the first frame. Scheduled
+      // behind the initial tile stream so it never competes with it.
+      setTimeout(prefetchUnderlayTiles, 1500);
+    });
 
     // Quantised to quarter-zoom steps: setZoom bails out on an unchanged value,
     // so this avoids rebuilding the layer set on every animation frame.

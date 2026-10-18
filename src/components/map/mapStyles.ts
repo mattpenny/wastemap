@@ -164,30 +164,41 @@ export function satelliteStyle(): StyleSpecification {
         id: "background",
         type: "background",
         // Painted by WebGL wherever no satellite tile is loaded — i.e. for the
-        // brief window during a `flyTo` while the destination's z13+ tiles are
-        // still being fetched, and around tile edges at low zoom. It must read
-        // as "water" (HK is mostly sea at this view) and not as a black void,
-        // because a near-black background flashes as a full black page every
-        // time the camera flies to a new facility whose tiles are uncached.
-        // Picked as a dark grey-teal so the brief flash reads as "tiles
-        // loading over the harbour" and matches the mask sea's tone family.
-        paint: { "background-color": "#1c3434" },
+        // brief window during a `flyTo` or a zoom-out while the destination's
+        // tiles are still being fetched, and around tile edges at low zoom. It
+        // must read as "water" and not as a black void, because a near-black
+        // background renders as black blocks at the outer edge of the viewport
+        // whenever the wide-zoom tiles lag (the periphery fills in last).
+        // Using the exact sea-mask tone makes any water-side gap invisible,
+        // and keeps land-side gaps a light "loading" patch instead of black.
+        paint: { "background-color": "#4e6966" },
       },
       {
         // Coarse underlay for the zoom-out gap — see the `imagery-low` source.
         // Must sit directly above the background and below every other layer so
-        // it only ever shows where the main imagery has no tile yet.
+        // it only ever shows where the main imagery has no tile yet. The
+        // brightness/contrast lift keeps its dark low-zoom pixels (Esri z9
+        // ocean averages luma ~60) well clear of "black block" territory even
+        // before the water mask paints over the sea.
         id: "satellite-low",
         type: "raster",
         source: "imagery-low",
-        paint: { "raster-fade-duration": 0 },
+        paint: {
+          "raster-fade-duration": 0,
+          "raster-brightness-min": 0.28,
+          "raster-brightness-max": 1,
+          "raster-contrast": -0.08,
+        },
       },
       {
         id: "satellite",
         type: "raster",
         source: "imagery",
         paint: {
-          "raster-fade-duration": 0,
+          // 300ms fade-in so the progressive edge fill during a zoom reads as
+          // tiles streaming in rather than rectangles popping (the periphery
+          // is always the last to land).
+          "raster-fade-duration": 300,
           /**
            * Two stacked measures against the dark, coarse z11–z12 mosaic Esri
            * serves over Hong Kong (z11 alone is ~19% near-black pixels, with
