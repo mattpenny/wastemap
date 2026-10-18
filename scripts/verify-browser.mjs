@@ -131,17 +131,17 @@ check("desktop: phone header disclosures are not rendered",
 await page.screenshot({ path: path.join(OUT_DIR, "opening-state-collapsed.png") });
 
 // =====================================================================
-// 2. Ranking card under the default RTS filter
+// 2. Ranking card under the default "All" filter
 // =====================================================================
 await rankingHeader.click();
 await page.waitForTimeout(800);
-check("RTS quick filter pre-selected",
-  (await page.getByRole("button", { name: /^RTS$/ }).getAttribute("aria-pressed")) === "true");
-check("All quick filter not selected",
-  (await page.getByRole("button", { name: /^All$/ }).getAttribute("aria-pressed")) === "false");
+check("All quick filter pre-selected",
+  (await page.getByRole("button", { name: /^All$/ }).getAttribute("aria-pressed")) === "true");
+check("RTS quick filter not selected",
+  (await page.getByRole("button", { name: /^RTS$/ }).getAttribute("aria-pressed")) === "false");
 
-const rtsRows = await page.locator("aside ul > li").count();
-check("ranking lists 7 RTS entries (6 stations + OITF group)", rtsRows === 7, `rows=${rtsRows}`);
+const defaultRows = await page.locator("aside ul > li").count();
+check("ranking lists 13 rows by default (19 sites, OITF collapsed)", defaultRows === 13, `rows=${defaultRows}`);
 
 // =====================================================================
 // 4. Open an RTS drawer: default view must be clean
@@ -220,8 +220,16 @@ await page.locator('button[aria-label="Close" i]').first().click().catch(() => {
 await page.waitForTimeout(600);
 
 // =====================================================================
-// 6. "All" filter — every site comes back
+// 6. Quick filters — RTS narrows the list, All restores it
 // =====================================================================
+await page.getByRole("button", { name: /^RTS$/ }).click();
+await page.waitForTimeout(1200);
+check("RTS chip is selected",
+  (await page.getByRole("button", { name: /^RTS$/ }).getAttribute("aria-pressed")) === "true");
+// 6 standalone RTS stations + the collapsed OITF group row.
+const rtsRows = await page.locator("aside ul > li").count();
+check("RTS filter lists 7 rows (6 stations + OITF group)", rtsRows === 7, `rows=${rtsRows}`);
+
 await page.getByRole("button", { name: /^All$/ }).click();
 await page.waitForTimeout(1200);
 check("All chip is selected",

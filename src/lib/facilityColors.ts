@@ -93,13 +93,13 @@ export function facilityRgb(f: FacilityColourRef): [number, number, number] {
 }
 
 /**
- * Three group colours for the map: Landfills red, RTS orange, and every park
+ * Three group colours for the map: Landfills red, RTS green, and every park
  * purple. The map pillars/discs use these so the three groups read at a glance;
  * the drawer still uses the per-facility `facilityHex`.
  */
 const GROUP_HEX: Record<FacilityCategory, string> = {
   Landfill: "#dc2626",
-  RTS: "#f97316",
+  RTS: "#22c55e",
   "I-PARK": "#8b5cf6",
   "O-PARK": "#8b5cf6",
   "Y-PARK": "#8b5cf6",
