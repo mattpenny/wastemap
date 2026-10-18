@@ -57,14 +57,18 @@ export function prefetchUnderlayTiles(): void {
     }
   }
 
-  let cursor = 0;
-  const pump = (): void => {
-    while (cursor < urls.length) {
-      const url = urls[cursor++];
+  // Real concurrency pool: CONCURRENCY workers pull from a shared queue, so a
+  // slow link never has the whole batch in flight at once.
+  const queue = [...urls];
+  const worker = async (): Promise<void> => {
+    for (let url = queue.shift(); url; url = queue.shift()) {
       // Fire-and-forget; a failure just means the underlay streams in later.
-      void fetch(url).catch(() => undefined);
-      if (cursor % CONCURRENCY === 0) return;
+      try {
+        await fetch(url);
+      } catch {
+        /* ignore */
+      }
     }
   };
-  for (let i = 0; i < CONCURRENCY; i++) pump();
+  for (let i = 0; i < CONCURRENCY; i++) void worker();
 }
