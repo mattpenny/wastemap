@@ -46,6 +46,19 @@ stay **complete and deduplicated**: deleting a month's file removes that month
 from the aggregate, and a re-sent copy beside the original is counted twice
 (the ingest reports the overlapping dates, naming both files).
 
+The root is configurable, so the exports can stay where they already live
+(NAS share, synced drive) instead of being copied into the repo:
+
+```bash
+WASTEMAP_DATA_DIR='\\NAS\weighbridge' npm run ingest
+```
+
+An externally supplied root is read-only to the ingest — it will not create
+station folders there, and a missing root is an error rather than a directory
+to create. This is what lets the map and another consumer of the same exports
+(a dashboard, a BI tool) read one dataset side by side, with no API between
+them.
+
 ### Raw export format
 
 Each file is a JSON **array** of weigh-in rows. The ingest reads only these

@@ -3,9 +3,9 @@
     "source": "Station weighbridge exports supplied by the operator (per-weigh-in records).",
     "sourceZh": "由營運方提供的轉運站地磅記錄（逐次過磅）。",
     "statusKept": "完成",
-    "generatedAt": "2026-10-18T14:27:20.909Z",
+    "generatedAt": "2026-10-18T14:53:38.944Z",
     "sourceFiles": [
-      "data/WKTS/wkts202610.json"
+      "WKTS/wkts202610.json"
     ],
     "folders": {
       "HKIWMF": 0,

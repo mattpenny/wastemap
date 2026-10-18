@@ -127,6 +127,20 @@ Adding a month is therefore: drop `wkts202611.json` into `data/WKTS/`, run
 `npm run ingest`, commit the regenerated `src/data/weighbridge/` and
 `public/weighbridge/`. The app needs no change.
 
+The data root does not have to be inside the repo. `WASTEMAP_DATA_DIR` points
+the ingest at any readable folder — a NAS share, a synced drive, an external
+disk — and an external root is only ever read, never written to, so a read-only
+mount works:
+
+```bash
+WASTEMAP_DATA_DIR='\\NAS\weighbridge' npm run ingest
+```
+
+That is also how the map and another reader of the same exports (a dashboard, a
+BI tool) coexist: both read the same `<STATION>/<month>.json` files, and neither
+becomes the other's data source. `meta.sourceFiles` records paths relative to
+the data root, so a local mount path never reaches this repo.
+
 ## Features
 
 - 3D pillars via MapLibre GL + deck.gl, with a pitch/bearing view of Hong Kong.

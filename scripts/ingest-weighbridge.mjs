@@ -2,15 +2,22 @@
 /**
  * Ingest raw RTS weighbridge exports into the split aggregate the app serves.
  * -------------------------------------------------------------------------
- * Input   data/<STATION>/*.json — raw station weighbridge exports, one row per
- *         weigh-in, filed under the station's own folder so a drop is
+ * Input   <DATA_ROOT>/<STATION>/*.json — raw station weighbridge exports, one
+ *         row per weigh-in, filed under the station's own folder so a drop is
  *         self-describing:
  *
- *           data/WKTS/wkts202610.json
- *           data/IETS/iets202610.json
- *           data/HKIWMF/hkiwmf202610.json
+ *           WKTS/wkts202610.json
+ *           IETS/iets202610.json
+ *           HKIWMF/hkiwmf202610.json
  *
- *         Folders are discovered recursively, so `data/WKTS/2026/10/…` works
+ *         `DATA_ROOT` is `<repo>/data` unless `WASTEMAP_DATA_DIR` says otherwise
+ *         (a NAS share, a synced folder, an external drive). Only the repo-local
+ *         root is written to — an external one is read as-is, so a read-only
+ *         mount works. The layout, not the location, is the contract: any other
+ *         reader of the same exports (a NAS dashboard, a BI tool) can sit beside
+ *         this one without either depending on the other.
+ *
+ *         Folders are discovered recursively, so `WKTS/2026/10/…` works
  *         too, and a stray file left at the data root is still read (its rows
  *         are attributed from StationId) for backwards compatibility.
  *         Recognised folders: WKTS IETS IWTS STTS NLTS NWNTTS (the six
@@ -75,6 +82,7 @@
  * station, and the app joins them back on.
  *
  * Run:  npm run ingest
+ *       WASTEMAP_DATA_DIR=\\\\NAS\\weighbridge npm run ingest   (read a share)
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -82,7 +90,17 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, "..");
-const DATA_DIR = path.join(ROOT, "data");
+
+// Where the raw exports live. Defaults to `<repo>/data`, but `WASTEMAP_DATA_DIR`
+// can point it anywhere the process can read — a NAS share mounted as a UNC
+// path, a synced folder, an external drive. The pipeline does not care where
+// the files are, only that they are laid out as `<STATION>/<export>.json`; this
+// is what lets the map and any other reader (a NAS dashboard, a BI tool) use
+// one dataset without either becoming the other's data source.
+const DATA_DIR = path.resolve(process.env.WASTEMAP_DATA_DIR ?? path.join(ROOT, "data"));
+/** The repo-local drop folder, as opposed to an externally supplied root. */
+const DATA_DIR_IS_LOCAL = DATA_DIR === path.join(ROOT, "data");
+
 const OUT_ROOT = path.join(ROOT, "src", "data", "weighbridge");
 
 // ---------------------------------------------------------------------------
@@ -294,8 +312,24 @@ const identifiers = new Set();
 // rather than making the operator read this file to learn the names. `data/`
 // is gitignored (raw exports carry account numbers and plates), so a fresh
 // clone has none of them and the first ingest is what puts them on disk.
-for (const code of Object.keys(STATIONS)) {
-  fs.mkdirSync(path.join(DATA_DIR, code), { recursive: true });
+//
+// Only for the repo-local folder. An externally supplied root is someone
+// else's tree — possibly a read-only share — so we read it and never write to
+// it. A missing external root is an error rather than something to create:
+// silently making a directory at a mistyped mount point hides the mistake.
+if (!DATA_DIR_IS_LOCAL) {
+  if (!fs.existsSync(DATA_DIR)) {
+    console.error(
+      `Data root not found: ${DATA_DIR}\n` +
+        `WASTEMAP_DATA_DIR must point at an existing folder laid out as ` +
+        `<STATION>/<export>.json (is the share mounted?).`
+    );
+    process.exit(1);
+  }
+} else {
+  for (const code of Object.keys(STATIONS)) {
+    fs.mkdirSync(path.join(DATA_DIR, code), { recursive: true });
+  }
 }
 
 /** Every .json under `dir`, at any depth, sorted for a stable run order. */
@@ -329,12 +363,16 @@ const files = findExports(DATA_DIR);
 
 if (files.length === 0) {
   console.error(
-    `No .json files under ${path.relative(ROOT, DATA_DIR)}/ — nothing to ingest.\n` +
+    `No .json files under ${DATA_DIR}/ — nothing to ingest.\n` +
       `Drop the operator's exports into a station folder, e.g. ` +
-      `${path.relative(ROOT, DATA_DIR)}/WKTS/wkts202610.json, then run this again.`
+      `${path.join(DATA_DIR, "WKTS", "wkts202610.json")}, then run this again.`
   );
   process.exit(1);
 }
+
+// Printed, not committed: `meta.sourceFiles` stays relative to the data root so
+// a local mount path never ends up in the public repo.
+console.log(`Data root: ${DATA_DIR}`);
 
 // Which folders exist, including empty ones — the report shows the whole
 // skeleton so a folder the operator has prepared but not filled yet is
@@ -350,7 +388,9 @@ for (const full of files) {
 }
 
 for (const full of files) {
-  const rel = path.relative(ROOT, full).split(path.sep).join("/");
+  // Relative to the data root, never to the repo: the root may be a NAS share,
+  // and these strings are committed to a public repo via `meta.sourceFiles`.
+  const rel = path.relative(DATA_DIR, full).split(path.sep).join("/");
   let parsed;
   try {
     parsed = JSON.parse(fs.readFileSync(full, "utf-8"));
@@ -549,8 +589,9 @@ const out = {
     sourceZh: "由營運方提供的轉運站地磅記錄（逐次過磅）。",
     statusKept: "完成",
     generatedAt: new Date().toISOString(),
-    // Paths relative to the repo root, folder included, so a figure in the
-    // app can be traced back to the exact export it came from.
+    // Paths relative to the data root, folder included (`WKTS/wkts202610.json`),
+    // so a figure can be traced back to the export it came from without
+    // publishing where the data root happens to be mounted.
     sourceFiles,
     // Which station folders were present at ingest time, and how many files
     // each held (0 = folder prepared but still empty).
@@ -732,7 +773,7 @@ for (const [code, count] of Object.entries(foldersSeen).sort()) {
   if (code === "(root)") continue;
   const known = STATIONS[code];
   console.log(
-    `  data/${code}/`.padEnd(16) +
+    `  ${code}/`.padEnd(12) +
       `${String(count).padStart(3)} file${count === 1 ? "" : "s"}` +
       (count === 0 ? "  (empty)" : "") +
       (known ? "" : "  <- not a known station folder")
@@ -740,7 +781,7 @@ for (const [code, count] of Object.entries(foldersSeen).sort()) {
 }
 if (foldersSeen["(root)"] > 0) {
   console.log(
-    `  data/ root      ${String(foldersSeen["(root)"]).padStart(3)} file(s) ` +
+    `  (root)          ${String(foldersSeen["(root)"]).padStart(3)} file(s) ` +
       `— attributed from StationId; move them into a station folder`
   );
 }
