@@ -360,6 +360,10 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
 
     mapRef.current = map;
 
+    // Dev/diagnostics hook: lets headless probes fly the camera without going
+    // through the UI. Harmless in production (a single window property).
+    (window as unknown as { __wmMap?: unknown }).__wmMap = map;
+
     // Zoom / compass only. The scale bar was dropped (it collided with the
     // bottom-anchored panels) and MapLibre's own attribution control is not
     // added either — the credit lives in the app's "i" popover instead, which

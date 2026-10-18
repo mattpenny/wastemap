@@ -1,7 +1,9 @@
 import type { StyleSpecification } from "maplibre-gl";
 
-/** Flat sea colour for the water mask. */
-const SEA_COLOR = "#1a4a60";
+/** Flat sea colour for the water mask — muted grey-teal, sampled from the
+ * natural satellite-sea tone the user preferred (#4e6966) rather than the
+ * original darker blue-teal #1a4a60. */
+const SEA_COLOR = "#4e6966";
 
 /**
  * Basemap definitions.
@@ -150,9 +152,9 @@ export function satelliteStyle(): StyleSpecification {
         // as "water" (HK is mostly sea at this view) and not as a black void,
         // because a near-black background flashes as a full black page every
         // time the camera flies to a new facility whose tiles are uncached.
-        // Picked as a dark sea blue so the brief flash reads as "tiles loading
-        // over the harbour" instead of a black screen.
-        paint: { "background-color": "#14304d" },
+        // Picked as a dark grey-teal so the brief flash reads as "tiles
+        // loading over the harbour" and matches the mask sea's tone family.
+        paint: { "background-color": "#1c3434" },
       },
       {
         id: "satellite",
