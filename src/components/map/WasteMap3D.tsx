@@ -82,6 +82,12 @@ const CATEGORY_RADIUS_M: Record<FacilityCategory, number> = {
   "Y-PARK": 340,
 };
 
+/** Uniform radius for the three strategic landfills (WENT / NENT / SENT).  
+ * Keeps the pillar base / colour‑zone area identical, matching the NENT pillar.  
+ * The original Landfill radius (620 m) is retained for any other Landfill‑type sites.  
+ */
+const LANDFILL_GROUP_RADIUS_M = 620;
+
 /** Size of the map pin, in screen pixels (constant regardless of zoom). */
 const PIN_SIZE_PX = 46;
 
@@ -270,15 +276,20 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
     const columnLayers = CATEGORY_ORDER.filter((cat) =>
       columnData.some((f) => f.category === cat)
     ).map(
-      (cat) =>
-        new ColumnLayer<FacilityProperties>({
+      (cat) => {
+        const effectiveRadius =
+          cat === "Landfill" ? LANDFILL_GROUP_RADIUS_M : CATEGORY_RADIUS_M[cat];
+        return new ColumnLayer<FacilityProperties>({
           id: `facility-column-${cat}`,
           data: columnData.filter((f) => f.category === cat),
           pickable: true,
           extruded: true,
           diskResolution: 24,
           radiusUnits: "meters",
-          radius: CATEGORY_RADIUS_M[cat] * radiusScale,
+          // Uniform radius for all three strategic landfills (WENT / NENT / SENT),
+          // so their pillar base / colour‑zone area is identical (NENT size).
+          // Other categories keep their own radius.
+          radius: effectiveRadius * radiusScale,
           elevationScale,
           getPosition: (d) => d.coordinates,
           getElevation: (d) => heightFor(d),
@@ -295,6 +306,7 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
           },
           transitions: { getElevation: 700, getFillColor: 300 },
         })
+      }
     );
 
     // Map pin marking the selected facility. Sized in screen pixels so it keeps

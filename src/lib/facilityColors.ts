@@ -15,6 +15,44 @@ import { CATEGORY_META } from "@/lib/categories";
  * already collapse into a single group row in the UI, so they share one
  * (distinct) teal rather than seven near-identical shades.
  */
+/**
+ * Rainbow palette for ranking-card groups. Every facility gets a distinct hue
+ * so the list reads as a spectrum and individual rows are easy to track across
+ * the throughput bars. The order is the canonical rainbow spectrum; the palette
+ * wraps with even spacing for longer lists.
+ */
+const RAINBOW_HEX = [
+  "#ef4444", // red
+  "#f97316", // orange
+  "#eab308", // amber
+  "#22c55e", // green
+  "#06b6d4", // cyan
+  "#3b82f6", // blue
+  "#8b5cf6", // violet
+  "#ec4899", // pink
+];
+
+export function rainbowHex(index: number): string {
+  return RAINBOW_HEX[((index % RAINBOW_HEX.length) + RAINBOW_HEX.length) % RAINBOW_HEX.length];
+}
+
+/** Maps a facility id to a stable rainbow colour. */
+const facilityRainbowIndex = (() => {
+  const order: string[] = [];
+  return (id: string) => {
+    let idx = order.indexOf(id);
+    if (idx === -1) {
+      idx = order.length;
+      order.push(id);
+    }
+    return idx;
+  };
+})();
+
+function facilityRainbowHex(f: FacilityColourRef): string {
+  return rainbowHex(facilityRainbowIndex(f.id));
+}
+
 const FACILITY_HEX: Record<string, string> = {
   // Landfills — distinct red / orange / pink.
   "landfill-went": "#dc2626",
@@ -79,6 +117,12 @@ export function groupRgb(f: FacilityColourRef): [number, number, number] {
 export function rgbaFor(hex: string, alpha: number): string {
   const [r, g, b] = hexToRgb(hex);
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+/** Ranking-card style for a facility: a rainbow colour for high visual distinction. */
+export function rankingFacilityHex(f: FacilityColourRef): string {
+  // Consistent rainbow hue by facility id (same as rainbowHex above)
+  return rainbowHex(facilityRainbowIndex(f.id));
 }
 
 /** Inline badge style tinted with a facility's colour. */

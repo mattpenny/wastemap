@@ -35,7 +35,7 @@ import {
   type FacilityProperties,
 } from "@/data/waste-facilities";
 import { CATEGORY_META, CATEGORY_ORDER } from "@/lib/categories";
-import { facilityHex, rgbaFor } from "@/lib/facilityColors";
+import { facilityHex, rankingFacilityHex, rgbaFor } from "@/lib/facilityColors";
 import { t, type Lang } from "@/lib/i18n";
 import type { WeighbridgeStation } from "@/lib/weighbridge";
 import { loadWeighbridgeDataset } from "@/lib/weighbridgeClient";
@@ -295,12 +295,12 @@ export default function HomePage() {
   const [mapStyle, setMapStyle] = useState<MapStyleId>(DEFAULT_MAP_STYLE);
   const [selected, setSelected] = useState<FacilityProperties | null>(null);
   /**
-   * Refuse Transfer Stations are pre-selected on first load, so the app opens
-   * on a readable subset instead of all 19 sites at once. `activeGroupId`
-   * derives from this, so the "RTS" quick filter shows as pressed too.
+   * All facilities are shown on first load, so the opening view reflects the
+   * full system rather than a single category. `activeGroupId` derives from
+   * this, so the "All facilities" quick filter shows as pressed too.
    */
   const [visibleCategories, setVisibleCategories] = useState<FacilityCategory[]>(
-    GROUP_PRESETS.find((preset) => preset.id === "rts")!.categories
+    GROUP_PRESETS.find((preset) => preset.id === "all")!.categories
   );
   /** Every panel starts collapsed; the map is the opening view. */
   const [legendOpen, setLegendOpen] = useState(false);
@@ -962,7 +962,7 @@ export default function HomePage() {
 
                       /* ---------------- Single facility ---------------- */
                       const facility = entry.facility;
-                      const accent = facilityHex(facility);
+                      const accent = rankingFacilityHex(facility);
                       const isActive = selectedId === facility.id;
                       return (
                         <li
