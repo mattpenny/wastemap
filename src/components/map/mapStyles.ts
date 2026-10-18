@@ -124,6 +124,22 @@ export function satelliteStyle(): StyleSpecification {
         maxzoom: 19,
         attribution: ESRI_ATTRIBUTION,
       },
+      // Coarse fallback imagery, drawn beneath `satellite`. During a fast
+      // zoom-out the sharp deep-zoom tiles keep covering the centre of the
+      // viewport while the new wide tiles for the outer ring are still on the
+      // wire — without this layer that ring shows the dark `background` paint
+      // as black blocks at the edges. One z8 tile covers all of Hong Kong, so
+      // it lands almost immediately and the gap reads as (softer) satellite
+      // imagery instead of a black flash. Same Esri service, capped at z8 so
+      // each tile is tiny.
+      "imagery-low": {
+        type: "raster",
+        tiles: [
+          "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        ],
+        tileSize: 256,
+        maxzoom: 8,
+      },
       labels: {
         type: "raster",
         tiles: [
@@ -155,6 +171,15 @@ export function satelliteStyle(): StyleSpecification {
         // Picked as a dark grey-teal so the brief flash reads as "tiles
         // loading over the harbour" and matches the mask sea's tone family.
         paint: { "background-color": "#1c3434" },
+      },
+      {
+        // Coarse underlay for the zoom-out gap — see the `imagery-low` source.
+        // Must sit directly above the background and below every other layer so
+        // it only ever shows where the main imagery has no tile yet.
+        id: "satellite-low",
+        type: "raster",
+        source: "imagery-low",
+        paint: { "raster-fade-duration": 0 },
       },
       {
         id: "satellite",
