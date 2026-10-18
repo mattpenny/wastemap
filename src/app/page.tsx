@@ -459,8 +459,26 @@ export default function HomePage() {
   // ------------------------------------------------------------------
   // Handlers
   // ------------------------------------------------------------------
+  /**
+   * Tracked so a map click on the already-selected facility does not re-fly
+   * the camera (toggling selection off stays a no-op too — deselect happens
+   * through the drawer's close button).
+   */
+  const selectedIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    selectedIdRef.current = selected?.id ?? null;
+  }, [selected]);
+
+  /**
+   * Selection from a click on the map itself. Same contract as picking a row
+   * in the ranking card: the facility becomes selected AND the camera flies in
+   * to it, so "click a pillar" and "click its row" behave identically.
+   */
   const handleSelect = useCallback((facility: FacilityProperties | null) => {
     setSelected(facility);
+    if (facility && facility.id !== selectedIdRef.current) {
+      mapHandle.current?.focusFacility(facility.id);
+    }
   }, []);
 
   const handleClose = useCallback(() => setSelected(null), []);
