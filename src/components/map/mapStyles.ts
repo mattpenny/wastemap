@@ -254,22 +254,71 @@ export function satelliteStyle(): StyleSpecification {
         },
       },
       {
-        // Esri's z10–z12 ocean over Hong Kong is a poor mosaic: measured on the
-        // raw tiles (out/tilediag/), z9 is clean, z10 has faint cloud shadow,
-        // z11 has large soft-edged dark blobs and z12 is almost black over deep
-        // water. Those blobs are in the source pixels, so no tone curve removes
-        // them without washing out the land with them.
+        // ----------------------------------------------------------------
+        // Why this layer exists, measured rather than guessed.
+        // ----------------------------------------------------------------
+        // Esri World Imagery is not one seamless mosaic — it is a stack of
+        // caches that switch at fixed zoom levels. Sampled at a single point
+        // over deep water south of Lamma (scripts/_tilesample.mjs):
         //
-        // A tint over the water is the honest fix: it pulls the shadowed and
-        // clean patches towards one sea tone while leaving ~40% of the imagery
-        // in place, so the sea still has depth and texture. It is deliberately
-        // much lighter than the old 0.97 mask, which replaced the sea outright
-        // (that was the "one colour tone layer" complaint). 0.58 was chosen by
-        // eye against the panned-south view in out/seashots/pan-*: at 0.7 the
-        // shadows are gone but the sea flattens, at 0.45 they read as blobs.
+        //     z8–z11   #1e4549   luma 61   (lighter, bluer tier)
+        //     z12–z17  #092936   luma 35   (much darker tier)
         //
-        // Banded, because the defect is banded: mild at z9, worst z10–13.5, and
-        // gone by z14.5 where Esri's water is clean.
+        // Land and the shallow harbour do NOT step: land holds luma 50–66 all
+        // the way up, and the harbour actually gets *brighter* past z12. So the
+        // step is confined to deep water, which is why it reads as a dark
+        // shadow appearing over the sea at one particular zoom.
+        //
+        // Rendered without any tint (scripts/_seasweep.mjs, camera z10→z16,
+        // open water south of Lamma), the sea's mean luma slides:
+        //
+        //     z10 95 · z11 87 · z12 70 · z12.5 59 · z13 52 · z13.5 43 · z15 35
+        //
+        // A global tone curve cannot repair this: lifting luma 35 back to ~88
+        // needs raster-brightness-min ≈ 0.3, which turns every land shadow to
+        // grey haze. The correction has to be confined to water, which is what
+        // this fill does.
+        //
+        // There is a second, smaller defect in the same place: adjacent Esri
+        // tiles over water differ by ~20 luma (a haze/date difference in the
+        // mosaic), so the sea shows pale rectangles with hard edges — measured
+        // in scripts/_seamprobe.mjs and _lowprobe.mjs. Those are *not* a
+        // loading gap: hiding `satellite-low` produces a byte-identical frame.
+        // At opacity a, a seam of 20 luma leaves 20·(1−a), so the ramp below
+        // is pushed to ~0.9 above z12.5, where seams drop under ~2 luma and
+        // stop being visible.
+        //
+        // The honest trade-off: at the overview the sea is untouched Esri
+        // imagery (seams ~20 luma but spread over a huge area, reading as
+        // natural water variation), and once you zoom in past z12 the water is
+        // graded almost flat. That is deliberate — deep water has no detail
+        // worth keeping, and at those zooms the eye is on the coastline and the
+        // facilities, both of which are land and therefore never tinted.
+        //
+        // The trick is that the opacity is *not* a taste knob, it is solved
+        // per zoom so the rendered sea lands on one tone (~88 rising gently to
+        // ~93) everywhere:
+        //
+        //     a(z) ≈ (T − R(z)) / (100 − R(z))     R = untinted luma
+        //
+        //   z10.6 0.00 · z11 0.08 · z11.5 0.30 · z12 0.62 · z12.5 0.78
+        //   z13 0.83 · z13.5 0.87 · z15 0.90
+        //
+        // Because the blended result is smooth, the ramp is invisible in
+        // motion — you never see a tint "arrive", the sea simply stays the same
+        // colour as you zoom. And at the default overview (z10.6) the opacity
+        // is 0, so the wide view keeps the untouched Esri water the map was
+        // always meant to show — the opposite of the old 0.97 mask, which
+        // replaced the sea with one flat tone at every zoom.
+        //
+        // SEA_COLOR's luma (~99) is chosen, not decorative: it is the value
+        // that lets a 0.9 blend lift deep water (35) to ~93 while leaving the
+        // bright harbour (98) essentially untouched at 99.
+        //
+        // If it ever needs re-tuning, re-run scripts/_seasweep.mjs and read the
+        // `tint on` column: it should stay flat across the zoom range. Do NOT
+        // simply raise the numbers — a flat high opacity at every zoom is the
+        // mask again, and it throws away the wide-view sea.
         id: "sea-tint",
         type: "fill",
         source: "openmaptiles",
@@ -281,13 +330,23 @@ export function satelliteStyle(): StyleSpecification {
             ["linear"],
             ["zoom"],
             9,
-            0.45,
-            10.5,
-            0.58,
-            13.5,
-            0.58,
-            14.5,
             0,
+            10.5,
+            0.02,
+            11,
+            0.08,
+            11.5,
+            0.3,
+            12,
+            0.62,
+            12.5,
+            0.78,
+            13,
+            0.83,
+            13.5,
+            0.87,
+            14.5,
+            0.9,
           ],
         },
       },
