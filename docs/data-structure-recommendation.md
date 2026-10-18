@@ -16,22 +16,35 @@ This is what is already wired and running in the app.
 
 ## 1. Keep the raw exports as-is
 
-Drop every operator export into a gitignored `data/` folder, unchanged:
+Drop every operator export into a gitignored `data/` folder, unchanged, filed
+under its station:
 
 ```
 data/
-  wkts202610.json     # one file per station per month, as received
-  wkts202611.json
-  ...
-  opek202609.json     # next station
-  opek202610.json
+  WKTS/
+    wkts202608.json   # one file per month, as received
+    wkts202609.json
+    wkts202610.json
+  IETS/
+    iets202610.json
+  NENT/               # landfills and I·PARK1 have their own folders
+  HKIWMF/
+  OITF/               # all seven outlying-island sites, one folder
 ```
 
-Do **not** reshape them at the source — the ingest reads every
-`data/*.json` and reconciles per-day breakdowns against period totals,
-failing fast if the export's own totals don't add up. Re-aggregating on
+The folder is the station: `WKTS IETS IWTS STTS NLTS NWNTTS` (standalone RTS),
+`NENT WENT` (landfills), `HKIWMF` (I·PARK1), `OITF` (the group). Files are found
+recursively, so `WKTS/2026/10/…` works too. Do **not** reshape them at the
+source — the ingest reads every `*.json` under `data/`, merges the months into
+one year file per station, and reconciles per-day breakdowns against period
+totals, failing fast if the export's own totals don't add up. Re-aggregating on
 ingest means future format tweaks stay a one-file change in
 `scripts/ingest-weighbridge.mjs`, not a re-export from the operator.
+
+Because each run is a full rebuild from the files on disk, the folder has to
+stay **complete and deduplicated**: deleting a month's file removes that month
+from the aggregate, and a re-sent copy beside the original is counted twice
+(the ingest reports the overlapping dates, naming both files).
 
 ### Raw export format
 
@@ -62,19 +75,23 @@ Minimal row:
 }
 ```
 
-The filename does not matter to the ingest — **every** `*.json` in `data/`
+The filename does not matter to the ingest — **every** `*.json` under `data/`
 is read (case-insensitive), so use a clear convention such as
 `<station><yyyymm>.json` (`wkts202610.json`). Save as UTF-8. Do not drop
 unrelated JSON in `data/`; a non-array file is skipped with a warning.
 
-A new **station** must first be added to `STATION_TO_FACILITY` in
+A new **station folder** must exist in `STATIONS` in
 `scripts/ingest-weighbridge.mjs` (currently WKTS, IETS, IWTS, STTS, NLTS,
-NWNTTS); the ingest aborts on an unknown `StationId`.
+NWNTTS, NENT, WENT, HKIWMF, OITF); the ingest creates the folder if it is
+missing, and reports — rather than guesses at — a folder it does not know.
+Rows whose `StationId` is unknown but which sit in a known folder are
+attributed to that folder; when the two disagree the row wins and a warning is
+recorded.
 
 ## 2. Pre-aggregate to a per-year split (live layout)
 
 `npm run ingest` (script: `scripts/ingest-weighbridge.mjs`) reads every
-`data/*.json` and emits a tree under `src/data/weighbridge/`:
+`*.json` under `data/` and emits a tree under `src/data/weighbridge/`:
 
 ```
 src/data/weighbridge/
@@ -152,17 +169,19 @@ client-side as before.
 
 There is no other moving part. The workflow:
 
-1. **More months for an existing station.** Drop the new export in
-   `data/` (e.g. `wkts202611.json`) and run `npm run ingest`. It reads
-   every file, merges by station, emits a new `WKTS/2026.json` (or
-   `WKTS/2027.json` if the month spans the year boundary) and a fresh
-   `WKTS/meta.json`. The route picks up the new year automatically.
-2. **A new RTS station.** Drop its exports in `data/` and run
+1. **More months for an existing station.** Drop the new export in the
+   station's folder (e.g. `data/WKTS/wkts202611.json`) and run
+   `npm run ingest`. It reads every file, merges by station, emits a new
+   `WKTS/2026.json` (or `WKTS/2027.json` if the month spans the year
+   boundary) and a fresh `WKTS/meta.json`. The route picks up the new year
+   automatically. Keep the earlier months in place — the run is a full
+   rebuild, so a removed file removes its month.
+2. **A new RTS station.** Drop its exports in its folder and run
    `npm run ingest`. A new `<STATION>/` directory is created with its
    `meta.json` and the year files the data covers, and the index is
-   updated. The facility id in the export must match the map's
-   `facilityId` for `?facility=rts-…` to resolve; the ingest
-   reconciles this and aborts on an unknown station.
+   updated. The folder name selects the facility via `STATIONS`; a
+   disagreement with the rows' `StationId` is reported, and rows with no
+   usable `StationId` fall back to the folder.
 3. **A typo or code change in the export.** The ingest normalises
    `S42.00` / case duplicates into one row and maps `P99 → private`,
    `C31`+`G01 → public/FEHD`, `P97 → GTW` (its own stream). Codes
