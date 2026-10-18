@@ -260,7 +260,11 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
       radiusUnits: "meters",
       lineWidthUnits: "meters",
       getPosition: (d) => d.coordinates,
-      getRadius: (d) => CATEGORY_RADIUS_M[d.category] * 1.3 * radiusScale,
+      getRadius: (d) => {
+        // Force identical base footprint for all three strategic landfills.
+        const base = d.category === "Landfill" ? LANDFILL_GROUP_RADIUS_M : CATEGORY_RADIUS_M[d.category];
+        return base * 1.3 * radiusScale;
+      },
       // Colour encodes the facility itself, so every site reads as its own
       // colour. Utilisation is still surfaced numerically in the tooltip,
       // the drawer and the header stats.
