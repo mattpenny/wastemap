@@ -194,6 +194,16 @@ function bump(map, key, tonnes) {
 }
 
 // ---------------------------------------------------------------------------
+// Aggregation state (declared up front: rows are aggregated file-by-file)
+// ---------------------------------------------------------------------------
+const excluded = {
+  notCompleted: { records: 0, tonnes: 0, byStatus: {} },
+  unparseableWeight: 0,
+  unknownStation: 0,
+};
+const stations = new Map();
+
+// ---------------------------------------------------------------------------
 // Read the raw exports
 // ---------------------------------------------------------------------------
 if (!fs.existsSync(DATA_DIR)) {
@@ -211,7 +221,6 @@ if (files.length === 0) {
   process.exit(1);
 }
 
-const rows = [];
 for (const file of files) {
   const full = path.join(DATA_DIR, file);
   let parsed;
@@ -225,22 +234,16 @@ for (const file of files) {
     console.error(`  ! ${file}: expected an array of rows — skipped`);
     continue;
   }
-  for (const r of parsed) rows.push({ ...r, __file: file });
+  // Aggregate straight into the accumulators and let the parsed array go, so
+  // memory stays bounded to one file even with years of monthly exports.
+  for (const r of parsed) addRow(r);
   console.log(`  read ${file}: ${parsed.length} rows`);
 }
 
 // ---------------------------------------------------------------------------
-// Aggregate
+// Aggregate one row (called per row as each file is read)
 // ---------------------------------------------------------------------------
-const excluded = {
-  notCompleted: { records: 0, tonnes: 0, byStatus: {} },
-  unparseableWeight: 0,
-  unknownStation: 0,
-};
-
-const stations = new Map();
-
-for (const row of rows) {
+function addRow(row) {
   const status = String(row["交收狀態"] ?? "").trim();
   const weight = toNumber(row["物料重量"]);
 
@@ -249,21 +252,21 @@ for (const row of rows) {
     excluded.notCompleted.records += 1;
     excluded.notCompleted.tonnes += weight ?? 0;
     excluded.notCompleted.byStatus[status] = (excluded.notCompleted.byStatus[status] ?? 0) + 1;
-    continue;
+    return;
   }
   if (weight === null) {
     excluded.unparseableWeight += 1;
-    continue;
+    return;
   }
 
   const stationId = String(row["StationId"] ?? "").trim();
   if (!STATION_TO_FACILITY[stationId]) {
     excluded.unknownStation += 1;
-    continue;
+    return;
   }
 
   const iso = toIsoDate(String(row["日期"] ?? ""));
-  if (!iso) continue;
+  if (!iso) return;
 
   const task = String(row["車輛任務"] ?? "").trim();
   const stream = streamForTask(task);
@@ -300,7 +303,7 @@ for (const row of rows) {
     // Maintenance is reported on its own and never enters the intake
     // aggregates below — including `streams`, which is the received-waste
     // split and must add up to `totals.tonnes`.
-    continue;
+    return;
   }
 
   station.totals.tonnes += weight;
@@ -652,6 +655,14 @@ fs.writeFileSync(
   `${JSON.stringify(indexPayload, null, 2)}\n`,
   "utf-8"
 );
+
+// Mirror the split layout into /public so the client can fetch it same-origin
+// (no serverless round-trip or cold start). The aggregate carries no account
+// numbers or licence plates, so committing the copy is safe.
+const PUBLIC_DIR = path.join(ROOT, "public", "weighbridge");
+fs.mkdirSync(PUBLIC_DIR, { recursive: true });
+fs.cpSync(OUT_ROOT, PUBLIC_DIR, { recursive: true });
+console.log(`  mirrored to ${path.relative(ROOT, PUBLIC_DIR)}/`);
 
 const stationCount = Object.keys(out.stations).length;
 console.log(

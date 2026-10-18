@@ -2,15 +2,16 @@
 
 import * as React from "react";
 import { ChevronDown, ChevronUp, Info, Scale } from "lucide-react";
-import {
-  CartesianGrid,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
+import type { ChartRow } from "./WasteChart";
+import dynamic from "next/dynamic";
+
+// The Recharts chart is heavy and only renders inside the weighbridge card
+// (which itself only appears when a station with records is selected), so it
+// is lazily loaded as a separate chunk.
+const WasteChart = dynamic(() => import("./WasteChart"), {
+  ssr: false,
+  loading: () => <div className="h-[150px]" aria-hidden />,
+});
 
 import {
   bucketDays,
@@ -23,7 +24,8 @@ import {
 import { pick, t, type Lang } from "@/lib/i18n";
 import { cn, formatNumber } from "@/lib/utils";
 
-/** One colour per delivery stream, reused by the chart and its legend. */
+// The stream colours / labels / chart series are also used by the legend and
+// the delivery-stream list below, so they stay here as well as in ./WasteChart.
 const STREAM_COLOR: Record<string, string> = {
   private: "#60a5fa",
   public: "#34d399",
@@ -379,7 +381,7 @@ export default function WeighbridgeSection({
   const gtwWaste = records.wasteTypes.find((w) => w.gtw);
   const total = summary.tonnes || 1;
 
-  const chartData = React.useMemo(() => {
+  const chartData = React.useMemo<ChartRow[]>(() => {
     const buckets = bucketDays(summary.daily, bucket);
     return buckets.map((b) => ({
       key: b.key,
@@ -555,66 +557,7 @@ export default function WeighbridgeSection({
               {t("wbNoData", lang)}
             </p>
           ) : (
-            <ResponsiveContainer width="100%" height={150}>
-              <LineChart data={chartData} margin={{ top: 4, right: 8, left: -8, bottom: 0 }}>
-                <CartesianGrid
-                  strokeDasharray="3 3"
-                  stroke="rgba(255,255,255,0.07)"
-                  vertical={false}
-                />
-                <XAxis
-                  dataKey="label"
-                  tickLine={false}
-                  axisLine={false}
-                  interval="preserveStartEnd"
-                  minTickGap={12}
-                  tick={{ fill: "rgba(255,255,255,0.45)", fontSize: 9 }}
-                />
-                <YAxis
-                  tickLine={false}
-                  axisLine={false}
-                  width={46}
-                  domain={[0, "auto"]}
-                  tick={{ fill: "rgba(255,255,255,0.45)", fontSize: 9 }}
-                  tickFormatter={(v: number) => formatNumber(v)}
-                />
-                <Tooltip
-                  cursor={{ stroke: "rgba(255,255,255,0.2)" }}
-                  contentStyle={{
-                    background: "rgba(15,23,42,0.96)",
-                    border: "1px solid rgba(255,255,255,0.14)",
-                    borderRadius: 10,
-                    fontSize: 11,
-                    padding: "8px 10px",
-                  }}
-                  labelStyle={{ color: "rgba(255,255,255,0.55)", fontSize: 10 }}
-                  labelFormatter={(label, payload) => {
-                    const days = payload?.[0]?.payload?.days;
-                    // A bucket that holds fewer days than it should is partial
-                    // — say so rather than letting a short October read as a
-                    // collapse in intake.
-                    return days && bucket !== "day"
-                      ? `${label} · ${days} ${t("wbDaysShort", lang)}`
-                      : String(label);
-                  }}
-                  formatter={(value: number, name: string) => [
-                    `${formatNumber(value)} ${t("tonnes", lang)}`,
-                    t(STREAM_LABEL_KEY[name as StreamKey] ?? "streamPrivate", lang),
-                  ]}
-                />
-                {STREAMS.map((key) => (
-                  <Line
-                    key={key}
-                    type="monotone"
-                    dataKey={key}
-                    stroke={STREAM_COLOR[key]}
-                    strokeWidth={2}
-                    dot={bucket !== "day"}
-                    activeDot={{ r: 3 }}
-                  />
-                ))}
-              </LineChart>
-            </ResponsiveContainer>
+            <WasteChart chartData={chartData} bucket={bucket} lang={lang} />
           )}
 
           {/* Series legend + what the line is measuring */}

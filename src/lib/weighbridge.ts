@@ -214,11 +214,129 @@ export interface WeighbridgeDataset {
   stations: Record<string, WeighbridgeStation>;
 }
 
-// The split-file data is loaded at runtime by `src/lib/weighbridgeServer.ts`
-// (used from the API route), not at build time. This file stays
-// client-safe — no `fs`, no synchronous data import — so it can be imported
-// from the `WeighbridgeSection` component without dragging node-only code
-// into the browser bundle.
+// ---------------------------------------------------------------------------
+// Assembly — shared by the server loader and the client static loader
+// ---------------------------------------------------------------------------
+// `weighbridgeServer.ts` reads the split files with `fs` and calls these pure
+// helpers; `weighbridgeClient.ts` fetches the same files from `/public` and
+// calls the same helpers. Keeping the merge/sum logic here means the two
+// loaders cannot drift apart and the browser never pulls node-only code.
+
+export interface AssembleOptions {
+  /** ISO date `YYYY-MM-DD`; only years intersecting this range are read. */
+  from?: string;
+  to?: string;
+}
+
+/** Which years of a station are needed to cover `[from, to]`. */
+export function yearsInRange(years: string[], from?: string, to?: string): string[] {
+  if (!from && !to) return years;
+  const lo = from ?? "0000-01-01";
+  const hi = to ?? "9999-12-31";
+  return years.filter((y) => {
+    const yStart = `${y}-01-01`;
+    const yEnd = `${y}-12-31`;
+    return yEnd >= lo && yStart <= hi;
+  });
+}
+
+const round3 = (n: number) => Math.round(n * 1000) / 1000;
+
+/**
+ * Build a full `WeighbridgeStation` from a station's `meta` and the already
+ * loaded `yearPayloads`. When `opts` carries a range, the waste-type /
+ * district totals are summed across the (already range-filtered) year files;
+ * otherwise the period totals come straight from `meta` (no re-sum needed).
+ */
+export function assembleFromYearPayloads(
+  meta: WeighbridgeStationMeta,
+  yearPayloads: WeighbridgeYearPayload[],
+  opts: AssembleOptions = {}
+): WeighbridgeStation {
+  const hasRange = Boolean(opts.from || opts.to);
+
+  const daily = yearPayloads
+    .flatMap((p) => p.daily)
+    .filter((d) => (!opts.from || d.date >= opts.from) && (!opts.to || d.date <= opts.to))
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  if (!hasRange) {
+    return buildStation(meta.stationId, meta, daily, meta.wasteTypes, meta.districts, false);
+  }
+
+  const wtMap = new Map<string, { tonnes: number; loads: number }>();
+  const distMap = new Map<string, { tonnes: number; loads: number }>();
+  for (const p of yearPayloads) {
+    for (const row of p.wasteTypes) {
+      const cur = wtMap.get(row.code) ?? { tonnes: 0, loads: 0 };
+      cur.tonnes += row.tonnes;
+      cur.loads += row.loads;
+      wtMap.set(row.code, cur);
+    }
+    for (const row of p.districts) {
+      const cur = distMap.get(row.code) ?? { tonnes: 0, loads: 0 };
+      cur.tonnes += row.tonnes;
+      cur.loads += row.loads;
+      distMap.set(row.code, cur);
+    }
+  }
+
+  const wasteTypes = meta.wasteTypes
+    .map((w) => ({
+      ...w,
+      tonnes: round3(wtMap.get(w.code)?.tonnes ?? 0),
+      loads: wtMap.get(w.code)?.loads ?? 0,
+    }))
+    .filter((w) => w.tonnes > 0)
+    .sort((a, b) => b.tonnes - a.tonnes);
+
+  const districts = meta.districts
+    .map((d) => ({
+      ...d,
+      tonnes: round3(distMap.get(d.code)?.tonnes ?? 0),
+      loads: distMap.get(d.code)?.loads ?? 0,
+    }))
+    .filter((d) => d.tonnes > 0)
+    .sort((a, b) => b.tonnes - a.tonnes);
+
+  return buildStation(meta.stationId, meta, daily, wasteTypes, districts, true);
+}
+
+function buildStation(
+  stationId: string,
+  meta: WeighbridgeStationMeta,
+  daily: WeighbridgeDay[],
+  wasteTypes: WeighbridgeWasteType[],
+  districts: WeighbridgeDistrict[],
+  fromRange: boolean
+): WeighbridgeStation {
+  const tonnes = round3(daily.reduce((a, d) => a + d.tonnes, 0));
+  const loads = daily.reduce((a, d) => a + d.loads, 0);
+  const operatingDays = daily.length;
+  const maintenanceTonnes = meta.wasteTypesMaintenance.reduce((a, w) => a + w.tonnes, 0);
+  const maintenanceLoads = meta.wasteTypesMaintenance.reduce((a, w) => a + w.loads, 0);
+
+  return {
+    stationId,
+    facilityId: meta.facilityId,
+    period: fromRange && daily.length > 0
+      ? { from: daily[0].date, to: daily[daily.length - 1].date, operatingDays }
+      : meta.period,
+    totals: {
+      tonnes,
+      loads,
+      tonnesPerDay: round3(tonnes / (operatingDays || 1)),
+      maintenanceTonnes: round3(maintenanceTonnes),
+      maintenanceLoads,
+    },
+    daily,
+    streams: meta.streams,
+    vehicleTasks: meta.vehicleTasks,
+    wasteTypes,
+    wasteTypesMaintenance: meta.wasteTypesMaintenance,
+    districts,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Re-slicing by date range

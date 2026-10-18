@@ -39,7 +39,7 @@ export interface WasteMap3DHandle {
   focusFacility: (id: string) => void;
 }
 
-interface WasteMap3DProps {
+export interface WasteMap3DProps {
   facilities: FacilityProperties[];
   selectedId: string | null;
   onSelectFacility: (facility: FacilityProperties | null) => void;

@@ -1,6 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  forwardRef,
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   AlertTriangle,
   ChevronDown,
@@ -13,36 +23,26 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 
-import WasteMap3D, {
-  type WasteMap3DHandle,
-} from "@/components/map/WasteMap3D";
+import type { WasteMap3DHandle, WasteMap3DProps } from "@/components/map/WasteMap3D";
 import type { MapStyleId } from "@/components/map/mapStyles";
 import { DEFAULT_MAP_STYLE } from "@/components/map/mapStyles";
 import FacilityDetailDrawer from "@/components/ui/FacilityDetailDrawer";
 import ScrollingName from "@/components/ui/ScrollingName";
 import MapInfoButton from "@/components/ui/MapInfoButton";
-import type {
-  FacilityCategory,
-  FacilityProperties,
+import {
+  WASTE_FACILITIES_DATA,
+  type FacilityCategory,
+  type FacilityProperties,
 } from "@/data/waste-facilities";
 import { CATEGORY_META, CATEGORY_ORDER } from "@/lib/categories";
 import { facilityHex } from "@/lib/facilityColors";
 import { t, type Lang } from "@/lib/i18n";
-import type { WeighbridgeDataset, WeighbridgeStation } from "@/lib/weighbridge";
+import type { WeighbridgeStation } from "@/lib/weighbridge";
+import { loadWeighbridgeDataset } from "@/lib/weighbridgeClient";
 import { cn, formatNumber } from "@/lib/utils";
 
-/** Shape of a single feature as returned by `/api/waste-data`. */
-interface FacilityFeature {
-  type: "Feature";
-  id: string;
-  geometry: { type: "Point"; coordinates: [number, number] };
-  properties: FacilityProperties;
-}
-
-interface FacilityFeatureCollection {
-  type: "FeatureCollection";
-  features: FacilityFeature[];
-}
+// Facility data now comes from the WASTE_FACILITIES_DATA import, so the
+// client needs no GeoJSON envelope.
 
 /** Font-scale control bounds. `--fs` multiplies font sizes only. */
 const FONT_SCALE_DEFAULT = 1.2;
@@ -253,11 +253,41 @@ function Segmented<T extends string>({
   );
 }
 
+// The map (MapLibre GL + deck.gl) is the heaviest dependency. Load it as a
+// separate chunk after the UI shell paints, instead of blocking first render.
+//
+// We cannot use `next/dynamic` here: it does not forward refs, and this map
+// exposes an imperative handle (`resetView` / `focusFacility`) through `ref`.
+// So we wrap `React.lazy` — which DOES forward a ref to a `forwardRef` component
+// — in our own `forwardRef` shell. That shell also gates rendering to the client
+// only (the equivalent of `next/dynamic`'s `ssr: false`), since maplibre touches
+// the DOM and must never execute on the server.
+const WasteMap3DImpl = lazy(() => import("@/components/map/WasteMap3D"));
+
+const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>((props, ref) => {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  if (!mounted) {
+    return <div className="absolute inset-0 bg-slate-950" aria-hidden />;
+  }
+  return (
+    <Suspense fallback={<div className="absolute inset-0 bg-slate-950" aria-hidden />}>
+      <WasteMap3DImpl ref={ref} {...props} />
+    </Suspense>
+  );
+});
+
 export default function HomePage() {
   const mapHandle = useRef<WasteMap3DHandle | null>(null);
 
-  const [facilities, setFacilities] = useState<FacilityProperties[]>([]);
-  const [loading, setLoading] = useState(true);
+  // Facility data is imported directly from the source-of-truth module
+  // (`src/data/waste-facilities.ts`), so it is available on the very first
+  // render — no API round-trip. The `/api/waste-data` route is kept only for
+  // external embedding.
+  const [facilities, setFacilities] = useState<FacilityProperties[]>(() =>
+    WASTE_FACILITIES_DATA.map((f) => ({ ...f }))
+  );
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [lang, setLang] = useState<Lang>("en");
@@ -304,58 +334,19 @@ export default function HomePage() {
   }, [fontScale]);
 
   // ------------------------------------------------------------------
-  // Load the facility data
-  // ------------------------------------------------------------------
-  useEffect(() => {
-    const controller = new AbortController();
-
-    async function load() {
-      try {
-        setLoading(true);
-        setError(null);
-        const res = await fetch("/api/waste-data", {
-          signal: controller.signal,
-        });
-        if (!res.ok) {
-          throw new Error(`Request failed with status ${res.status}`);
-        }
-        const geojson: FacilityFeatureCollection = await res.json();
-
-        // Trust the geometry over the duplicated property copy so the pillars
-        // and the API can never disagree about where a facility is.
-        const mapped = geojson.features.map((feature) => ({
-          ...feature.properties,
-          coordinates: feature.geometry.coordinates,
-        }));
-
-        setFacilities(mapped);
-      } catch (err) {
-        if (err instanceof DOMException && err.name === "AbortError") return;
-        console.error("[waste-map] Failed to load facility data:", err);
-        setError(err instanceof Error ? err.message : "Unknown error");
-      } finally {
-        if (!controller.signal.aborted) setLoading(false);
-      }
-    }
-
-    load();
-    return () => controller.abort();
-  }, []);
-
-  // ------------------------------------------------------------------
   // Load the measured station intake (operator weighbridge records)
   // ------------------------------------------------------------------
-  // A separate source from the EPD facility register above, and a separate
-  // request, so a failure here cannot take the map down with it — the
-  // weighbridge block simply does not render.
+  // A separate source from the EPD facility register. Now fetched from the
+  // same-origin static copy in /public (via the client loader), so there is
+  // no serverless round-trip or cold start. A failure here cannot take the
+  // map down with it — the weighbridge block simply does not render.
   useEffect(() => {
     const controller = new AbortController();
 
     async function load() {
       try {
-        const res = await fetch("/api/station-data", { signal: controller.signal });
-        if (!res.ok) throw new Error(`Request failed with status ${res.status}`);
-        const data: WeighbridgeDataset = await res.json();
+        const data = await loadWeighbridgeDataset();
+        if (controller.signal.aborted) return;
         setStationRecords(data.stations ?? {});
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return;
