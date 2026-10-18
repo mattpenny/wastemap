@@ -221,6 +221,80 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
   );
 
   /**
+   * Perspective compensation for the three landfill pillars.
+   *
+   * Metric-identical cylinders project at different sizes in a pitched camera:
+   * whichever landfill is closest to the camera (SENT — southernmost at the
+   * default view) appears clearly wider than the far one (NENT). All three
+   * landfills are built at ONE metric size on purpose, so the apparent
+   * difference is pure perspective, not data. Each landfill's radius and
+   * height are scaled so they all read at the same on-screen size as NENT.
+   * Non-landfill categories return 1.
+   */
+  const landfillScale = useCallback(
+    (f: FacilityProperties): number => {
+      const map = mapRef.current;
+      if (f.category !== "Landfill" || !map) return 1;
+      const nent = facilities.find((fac) => fac.id === "landfill-nent");
+      if (!nent) return 1;
+
+      /**
+       * The ground-to-screen scale is not uniform across the screen at pitch,
+       * so a single local factor still leaves the wide glow discs mismatched —
+       * their near edge projects disproportionately wide. Measure the scale at
+       * the disc's two horizontally-extreme rim points (the ground direction
+       * whose projection points screen-right/left) and sum those; scaling each
+       * landfill by (NENT's sum / this landfill's sum) neutralises the
+       * perspective across the whole footprint.
+       */
+      const DISC_R = LANDFILL_GROUP_RADIUS_M * 1.3;
+
+      /** Horizontal pixels per ground metre at an arbitrary ground point. */
+      const hPerMetreAt = (lng: number, lat: number) => {
+        const p0 = map.project({ lng, lat });
+        const mPerLng = 111320 * Math.cos((lat * Math.PI) / 180);
+        const dM = 400;
+        const pe = map.project({ lng: lng + dM / mPerLng, lat });
+        const pn = map.project({ lng, lat: lat + dM / 110574 });
+        return Math.hypot((pe.x - p0.x) / dM, (pn.x - p0.x) / dM);
+      };
+
+      const rimScaleSum = (fac: FacilityProperties) => {
+        const [lng, lat] = fac.coordinates;
+        const p0 = map.project({ lng, lat });
+        const mPerLng = 111320 * Math.cos((lat * Math.PI) / 180);
+        const dM = 400;
+        const pe = map.project({ lng: lng + dM / mPerLng, lat });
+        const pn = map.project({ lng, lat: lat + dM / 110574 });
+        const dxde = (pe.x - p0.x) / dM;
+        const dxdn = (pn.x - p0.x) / dM;
+        const len = Math.hypot(dxde, dxdn);
+        if (!(len > 0)) return 0;
+        // Ground direction that projects horizontally on screen.
+        const ux = dxde / len;
+        const uy = dxdn / len;
+        const edge1 = hPerMetreAt(
+          lng + (ux * DISC_R) / mPerLng,
+          lat + (uy * DISC_R) / 110574
+        );
+        const edge2 = hPerMetreAt(
+          lng - (ux * DISC_R) / mPerLng,
+          lat - (uy * DISC_R) / 110574
+        );
+        return edge1 + edge2;
+      };
+
+      const ref = rimScaleSum(nent);
+      const here = rimScaleSum(f);
+      if (!(ref > 0) || !(here > 0)) return 1;
+      // Clamped so a pathological camera pose can never collapse or inflate a
+      // pillar; 1.6x covers the whole overview-to-flyTo range by a wide margin.
+      return Math.max(0.5, Math.min(1.6, ref / here));
+    },
+    [facilities]
+  );
+
+  /**
    * Keeps the *on-screen* height of the pillars roughly constant across zoom
    * levels: apparent size scales with 2^(zoom), so the scale factor is the
    * inverse. Clamped so the columns stay sensible at both extremes.
@@ -261,9 +335,11 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
       lineWidthUnits: "meters",
       getPosition: (d) => d.coordinates,
       getRadius: (d) => {
-        // Force identical base footprint for all three strategic landfills.
+        // Force identical base footprint for all three strategic landfills,
+        // then apply the perspective compensation so the nearer ones do not
+        // project wider than NENT's in the pitched default view.
         const base = d.category === "Landfill" ? LANDFILL_GROUP_RADIUS_M : CATEGORY_RADIUS_M[d.category];
-        return base * 1.3 * radiusScale;
+        return base * landfillScale(d) * 1.3 * radiusScale;
       },
       // Colour encodes the facility itself, so every site reads as its own
       // colour. Utilisation is still surfaced numerically in the tooltip,
@@ -277,41 +353,77 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
       transitions: { getRadius: 500 },
     });
 
-    const columnLayers = CATEGORY_ORDER.filter((cat) =>
-      columnData.some((f) => f.category === cat)
-    ).map(
-      (cat) => {
-        const effectiveRadius =
-          cat === "Landfill" ? LANDFILL_GROUP_RADIUS_M : CATEGORY_RADIUS_M[cat];
-        return new ColumnLayer<FacilityProperties>({
-          id: `facility-column-${cat}`,
-          data: columnData.filter((f) => f.category === cat),
-          pickable: true,
-          extruded: true,
-          diskResolution: 24,
-          radiusUnits: "meters",
-          // Uniform radius for all three strategic landfills (WENT / NENT / SENT),
-          // so their pillar base / colour‑zone area is identical (NENT size).
-          // Other categories keep their own radius.
-          radius: effectiveRadius * radiusScale,
-          elevationScale,
-          getPosition: (d) => d.coordinates,
-          getElevation: (d) => heightFor(d),
-          getFillColor: (d) => [...groupRgb(d), 245],
-          stroked: true,
-          getLineColor: () => [255, 255, 255, 60],
-          lineWidthUnits: "meters",
-          getLineWidth: () => 0,
-          material: {
-            ambient: 0.4,
-            diffuse: 0.65,
-            shininess: 40,
-            specularColor: [90, 100, 110],
-          },
-          transitions: { getElevation: 700, getFillColor: 300 },
-        })
+    // ColumnLayer takes ONE radius per layer, and the three landfills each
+    // need their own perspective-compensated radius, so the Landfill category
+    // is emitted as one layer per site. Every other category stays a single
+    // layer with its shared radius.
+    const columnLayers: ColumnLayer<FacilityProperties>[] = [];
+    for (const cat of CATEGORY_ORDER) {
+      const rows = columnData.filter((f) => f.category === cat);
+      if (rows.length === 0) continue;
+      if (cat !== "Landfill") {
+        columnLayers.push(
+          new ColumnLayer<FacilityProperties>({
+            id: `facility-column-${cat}`,
+            data: rows,
+            pickable: true,
+            extruded: true,
+            diskResolution: 24,
+            radiusUnits: "meters",
+            radius: CATEGORY_RADIUS_M[cat] * radiusScale,
+            elevationScale,
+            getPosition: (d) => d.coordinates,
+            getElevation: (d) => heightFor(d),
+            getFillColor: (d) => [...groupRgb(d), 245],
+            stroked: true,
+            getLineColor: () => [255, 255, 255, 60],
+            lineWidthUnits: "meters",
+            getLineWidth: () => 0,
+            material: {
+              ambient: 0.4,
+              diffuse: 0.65,
+              shininess: 40,
+              specularColor: [90, 100, 110],
+            },
+            transitions: { getElevation: 700, getFillColor: 300 },
+          })
+        );
+        continue;
       }
-    );
+      for (const f of rows) {
+        // Uniform metric radius (NENT size) scaled by the perspective factor
+        // so all three landfills read the same size on screen; the height is
+        // divided by the same factor for the same reason — the dimensions have
+        // to stay in proportion.
+        const s = landfillScale(f);
+        columnLayers.push(
+          new ColumnLayer<FacilityProperties>({
+            id: `facility-column-landfill-${f.id}`,
+            data: [f],
+            pickable: true,
+            extruded: true,
+            diskResolution: 24,
+            radiusUnits: "meters",
+            radius: LANDFILL_GROUP_RADIUS_M * s * radiusScale,
+            elevationScale,
+            getPosition: (d) => d.coordinates,
+            getElevation: (d) => heightFor(d) / s,
+            getFillColor: (d) => [...groupRgb(d), 245],
+            stroked: true,
+            getLineColor: () => [255, 255, 255, 60],
+            lineWidthUnits: "meters",
+            getLineWidth: () => 0,
+            material: {
+              ambient: 0.4,
+              diffuse: 0.65,
+              shininess: 40,
+              specularColor: [90, 100, 110],
+            },
+            transitions: { getElevation: 700, getFillColor: 300 },
+          })
+        );
+      }
+    }
 
     // Map pin marking the selected facility. Sized in screen pixels so it keeps
     // a constant size at every zoom, and billboarded so it always faces the
@@ -334,7 +446,7 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
       : null;
 
     return [baseLayer, ...columnLayers, ...(pinLayer ? [pinLayer] : [])];
-  }, [shown, selectedId, heightFor, elevationScale]);
+  }, [shown, selectedId, heightFor, elevationScale, landfillScale]);
 
   // ------------------------------------------------------------------
   // Initialise the map exactly once
