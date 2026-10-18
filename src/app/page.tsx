@@ -1110,7 +1110,7 @@ export default function HomePage() {
             {/* Map "i" — holds the imagery credit and the tech explanation that
                 used to sit permanently on screen. Sits at the right end of the
                 dock on phones (spaced by the dock's own `gap-1`), and back in
-                the bottom-left corner from lg up. */}
+                the bottom-right corner from lg up. */}
             <MapInfoButton
               lang={lang}
               mapStyle={mapStyle}

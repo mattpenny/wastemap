@@ -36,10 +36,12 @@ await page.goto(BASE, { waitUntil: "domcontentloaded", timeout: 60000 });
 // Let the map + deck.gl layers settle (tile streams never go idle, so waiting
 // for networkidle would hang indefinitely). Wait for the map's loading overlay
 // to disappear (style `load` event or the 12s fallback), then let pillars frame.
-// Case-insensitive: the header's stat labels are CSS-uppercased, and innerText
-// reflects text-transform, so the rendered text is "FACILITIES".
+// Wait until the app shell has painted its facility-related UI. The header
+// renders "EPD FACILITY DATA" (CSS-uppercased), so match the stem "facilit"
+// rather than the plural "facilities" — the latter only ever appears once the
+// (optional) header-detail figures are expanded, and never at the opening state.
 await page.waitForFunction(
-  () => /facilities/i.test(document.body.innerText),
+  () => /facilit/i.test(document.body.innerText),
   { timeout: 60000 }
 );
 await page.waitForFunction(
@@ -63,9 +65,6 @@ const rankingHeader = page.locator("button:not([data-dock-tab])", {
 const legendHeader = page.locator("button:not([data-dock-tab])", {
   hasText: /^Legend$/,
 });
-const trendHeader = page.locator("button:not([data-dock-tab])", {
-  hasText: "Hong Kong-wide annual waste disposal",
-});
 
 // =====================================================================
 // 1. Opening state — everything collapsed, RTS pre-selected
@@ -73,16 +72,17 @@ const trendHeader = page.locator("button:not([data-dock-tab])", {
 let bodyText = await page.evaluate(() => document.body.innerText);
 
 check("app title present", /Waste/i.test(bodyText));
-check("three panel headers rendered", (await rankingHeader.count()) === 1 &&
-  (await legendHeader.count()) === 1 && (await trendHeader.count()) === 1);
+check("both panel headers rendered", (await rankingHeader.count()) === 1 &&
+  (await legendHeader.count()) === 1);
 
 check("ranking body not rendered", (await page.locator("button", { hasText: /^All$/ }).count()) === 0);
 check("legend body not rendered",
   (await page.locator("button", { hasText: "Strategic Landfill" }).count()) === 0);
-check("trend chart not rendered", (await page.locator(".recharts-wrapper").count()) === 0);
+check("no chart on the map while everything is collapsed",
+  (await page.locator(".recharts-wrapper").count()) === 0);
 
 const chevrons = await Promise.all(
-  [rankingHeader, legendHeader, trendHeader].map(async (h) =>
+  [rankingHeader, legendHeader].map(async (h) =>
     /chevron-down/.test((await h.locator("svg").last().getAttribute("class")) ?? "")
   )
 );
@@ -102,25 +102,23 @@ const layout = await page.evaluate(() => {
   return {
     ranking: at('[data-testid="ranking-sheet"]'),
     legend: at('[data-testid="legend-sheet"]'),
-    trend: at('[data-testid="trend-sheet"]'),
     info: at('[data-testid="map-info"]'),
     toolbar: at('[data-testid="display-toolbar"]'),
     header: at("header"),
     dockTabs: [...document.querySelectorAll("[data-dock-tab]")].filter(
       (el) => el.getBoundingClientRect().height > 0
     ).length,
-    // The phone disclosures must not exist up here: the figures are always on
-    // from md up, and the toolbar is its own row beside the header.
+    // The phone disclosures must not exist up here: the toolbar is its own row
+    // beside the header on desktop.
     phoneDisclosures: [
-      '[data-testid="header-detail-toggle"]',
       '[data-testid="display-toggle"]',
     ].filter((sel) => (document.querySelector(sel)?.getBoundingClientRect().height ?? 0) > 0).length,
   };
 });
 check("desktop: ranking card is top-right", layout.ranking.x > 1000 && layout.ranking.y < 120, JSON.stringify(layout.ranking));
 check("desktop: legend card is bottom-left", layout.legend.x < 60 && layout.legend.y > 700, JSON.stringify(layout.legend));
-check("desktop: trend card is bottom-right", layout.trend.x > 1000 && layout.trend.y > 700, JSON.stringify(layout.trend));
-check("desktop: info button is bottom-left", layout.info.x === 12, JSON.stringify(layout.info));
+check("desktop: info button is bottom-right",
+  layout.info.right > 1400 && layout.info.y > 700, JSON.stringify(layout.info));
 check("desktop: phone dock is hidden", layout.dockTabs === 0, `visibleTabs=${layout.dockTabs}`);
 check("desktop: display toolbar is its own row beside the header",
   layout.toolbar.x > layout.header.right && layout.toolbar.y < 120,
@@ -128,28 +126,12 @@ check("desktop: display toolbar is its own row beside the header",
 check("desktop: phone header disclosures are not rendered",
   layout.phoneDisclosures === 0, `visible=${layout.phoneDisclosures}`);
 
-// RTS is the default filter: 13 RTS sites (6 standalone + 7 OITF), 6 with a
-// published rate, 7 without.
-check("header stats show RTS-only subset (13 facilities)", /(^|\s)13(\s|$)/.test(bodyText) &&
-  /facilit/i.test(bodyText), bodyText.match(/FACILITIES[^\n]*\n?[^\n]*/)?.[0] ?? "");
-check("header stats show 6/13 published", bodyText.includes("6/13"));
+// The header no longer prints facility counts (the figures block was removed),
+// so there is nothing numeric to assert at the opening state.
 await page.screenshot({ path: path.join(OUT_DIR, "opening-state-collapsed.png") });
 
 // =====================================================================
-// 2. Trend panel — its own card on the map, not inside the drawer
-// =====================================================================
-await trendHeader.click();
-await page.waitForTimeout(1200);
-bodyText = await page.evaluate(() => document.body.innerText);
-// MetaRow/card labels are CSS-uppercased, so match the rendered casing.
-check("HK-wide trend panel on map", /HONG KONG-WIDE ANNUAL WASTE DISPOSAL/i.test(bodyText));
-check("trend panel states not-facility scope", /Not any single facility/i.test(bodyText));
-const chartsOnMap = await page.locator(".recharts-wrapper").count();
-check("one recharts panel (trend card) while no drawer open", chartsOnMap === 1, `charts=${chartsOnMap}`);
-await page.screenshot({ path: path.join(OUT_DIR, "map-with-trend.png") });
-
-// =====================================================================
-// 3. Ranking card under the default RTS filter
+// 2. Ranking card under the default RTS filter
 // =====================================================================
 await rankingHeader.click();
 await page.waitForTimeout(800);
@@ -186,7 +168,8 @@ check("drawer default hides Coordinates", !/COORDINATES/.test(drawerText));
 check("drawer default hides Operational note", !/OPERATIONAL NOTE/.test(drawerText));
 check("drawer default hides Opening hours", !/OPENING HOURS/.test(drawerText));
 check("no chart inside drawer", (await drawer.locator(".recharts-wrapper").count()) === 0);
-check("trend card hidden while drawer open", (await page.locator(".recharts-wrapper").count()) === 0);
+check("no chart on the map while a non-weighbridge drawer is open",
+  (await page.locator(".recharts-wrapper").count()) === 0);
 await page.screenshot({ path: path.join(OUT_DIR, "drawer-iets-default.png") });
 
 // =====================================================================
@@ -237,13 +220,15 @@ await page.locator('button[aria-label="Close" i]').first().click().catch(() => {
 await page.waitForTimeout(600);
 
 // =====================================================================
-// 6. "All" filter — the other 6 sites come back
+// 6. "All" filter — every site comes back
 // =====================================================================
 await page.getByRole("button", { name: /^All$/ }).click();
 await page.waitForTimeout(1200);
-bodyText = await page.evaluate(() => document.body.innerText);
-check("All filter restores 19 facilities", /(^|\s)19(\s|$)/.test(bodyText) && /facilit/i.test(bodyText));
-check("All filter restores 11/19 published", bodyText.includes("11/19"));
+check("All chip is selected",
+  (await page.getByRole("button", { name: /^All$/ }).getAttribute("aria-pressed")) === "true");
+// 19 mapped sites; the seven OITF facilities collapse into ONE group row.
+const allRows = await page.locator("aside ul > li").count();
+check("All filter lists 13 rows (19 sites, OITF collapsed)", allRows === 13, `rows=${allRows}`);
 
 // =====================================================================
 // 7. WENT landfill drawer (void volume)
@@ -621,12 +606,6 @@ if (await oitf.count()) {
     };
     const h1 = document.querySelector("h1");
     const cs = h1 ? getComputedStyle(h1) : null;
-    // Is any *visible* element rendering the given exact text? innerText only
-    // covers rendered nodes, so this is a true visibility test.
-    const textShown = (re) =>
-      [...document.querySelectorAll("span, p, button")].some(
-        (el) => re.test(el.innerText?.trim() ?? "") && el.getBoundingClientRect().height > 0
-      );
     return {
       titleLines: h1 ? Math.round(h1.getBoundingClientRect().height / parseFloat(cs.lineHeight)) : null,
       titleText: h1?.innerText,
@@ -635,13 +614,10 @@ if (await oitf.count()) {
       scrollW: document.documentElement.scrollWidth,
       vw: innerWidth,
       vh: innerHeight,
-      figuresShown: textShown(/^(facilities|設施)$/i),
-      publishedShown: textShown(/^(with published rate|有公布處理量)$/i),
       toolbarShown: rect(document.querySelector('[data-testid="display-toolbar-phone"]'))?.shown ?? null,
       // The desktop copy of the toolbar lives in the DOM but must never show
-      // down here — that is what `md:flex` is for.
+      // down here — that is what `md:hidden` is for.
       desktopToolbarShown: rect(document.querySelector('[data-testid="display-toolbar"]'))?.shown ?? null,
-      detailToggle: rect(document.querySelector('[data-testid="header-detail-toggle"]')),
       displayToggle: rect(document.querySelector('[data-testid="display-toggle"]')),
     };
   });
@@ -649,16 +625,12 @@ if (await oitf.count()) {
   check("mobile: title stays on one line", m.titleLines === 1, `lines=${m.titleLines} text="${m.titleText}"`);
   check("mobile: dock is pinned to the bottom edge", Math.abs(m.dock.bottom - m.vh) <= 1, JSON.stringify(m.dock));
   check(
-    "mobile: dock carries all three tabs",
-    (await tab("list").count()) === 1 &&
-      (await tab("legend").count()) === 1 &&
-      (await tab("trend").count()) === 1
+    "mobile: dock carries both tabs",
+    (await tab("list").count()) === 1 && (await tab("legend").count()) === 1
   );
   check(
     "mobile: no sheet is open on load",
-    !(await sheetShown("ranking-sheet")) &&
-      !(await sheetShown("legend-sheet")) &&
-      !(await sheetShown("trend-sheet"))
+    !(await sheetShown("ranking-sheet")) && !(await sheetShown("legend-sheet"))
   );
   check("mobile: no horizontal overflow", m.scrollW <= m.vw, `scrollW=${m.scrollW} vw=${m.vw}`);
 
@@ -668,52 +640,16 @@ if (await oitf.count()) {
   check("mobile: map keeps most of the viewport", mapShare >= 0.75, `${Math.round(mapShare * 100)}%`);
 
   // -----------------------------------------------------------------
-  // The two phone disclosures — header figures and the display toolbar.
-  // Both start closed, so the opening view is the title and nothing else.
+  // The one phone disclosure left — the display toolbar (the header figures
+  // block was removed). It starts closed, so the opening view is the title.
   // -----------------------------------------------------------------
-  check("mobile: header figures are collapsed on load", !m.figuresShown && !m.publishedShown,
-    `facilities=${m.figuresShown} published=${m.publishedShown}`);
   // The phone toolbar is not rendered at all until its pill is tapped, and the
   // desktop copy that does exist in the DOM must stay `display: none`.
   check("mobile: display toolbar is collapsed on load", !m.toolbarShown && !m.desktopToolbarShown,
     `phone=${m.toolbarShown} desktopCopy=${m.desktopToolbarShown}`);
-  check("mobile: both header chevrons are on screen",
-    m.detailToggle?.shown === true && m.displayToggle?.shown === true,
-    `detail=${JSON.stringify(m.detailToggle)} display=${JSON.stringify(m.displayToggle)}`);
-  check("mobile: header stays short with both disclosures shut", m.header.h <= 90, `h=${m.header.h}`);
-
-  // Chevron -> figures on, chevron -> figures off again.
-  const figuresVisible = () =>
-    mobile.evaluate(() =>
-      [...document.querySelectorAll("span")].some(
-        (el) => /^(facilities|設施)$/i.test(el.innerText?.trim() ?? "") && el.getBoundingClientRect().height > 0
-      )
-    );
-
-  await mobile.locator('[data-testid="header-detail-toggle"]').click();
-  await mobile.waitForTimeout(700);
-  const opened = await mobile.evaluate(() => {
-    const vis = (re) =>
-      [...document.querySelectorAll("span")].some(
-        (el) => re.test(el.innerText?.trim() ?? "") && el.getBoundingClientRect().height > 0
-      );
-    return {
-      figures: vis(/^(facilities|設施)$/i),
-      published: vis(/^(with published rate|有公布處理量)$/i),
-      noFigure: vis(/^(no site figure|無各站數據)$/i),
-      expanded: document
-        .querySelector('[data-testid="header-detail-toggle"]')
-        ?.getAttribute("aria-expanded"),
-    };
-  });
-  check("mobile: chevron reveals the facility figures",
-    opened.figures && opened.published && opened.noFigure, JSON.stringify(opened));
-  check("mobile: chevron reports aria-expanded", opened.expanded === "true", `aria-expanded=${opened.expanded}`);
-  await mobile.screenshot({ path: path.join(OUT_DIR, "mobile-390-header-detail.png") });
-
-  await mobile.locator('[data-testid="header-detail-toggle"]').click();
-  await mobile.waitForTimeout(700);
-  check("mobile: chevron collapses the figures again", !(await figuresVisible()));
+  check("mobile: display chevron is on screen",
+    m.displayToggle?.shown === true, `display=${JSON.stringify(m.displayToggle)}`);
+  check("mobile: header stays short with the disclosure shut", m.header.h <= 90, `h=${m.header.h}`);
 
   // Pill -> toolbar. It must open inside the header card, not as a loose row
   // over the map, and the desktop copy of the toolbar must stay hidden.
@@ -779,7 +715,7 @@ if (await oitf.count()) {
   await mobile.waitForTimeout(600);
   check("mobile: display pill collapses the toolbar again", !(await mobile.evaluate(() =>
     (document.querySelector('[data-testid="display-toolbar-phone"]')?.getBoundingClientRect().height ?? 0) > 0)));
-  check("mobile: header is short again with both disclosures shut",
+  check("mobile: header is short again with the disclosure shut",
     (await mobile.evaluate(() => Math.round(document.querySelector("header").getBoundingClientRect().height))) <= 90);
 
   // Ranking tab -> sheet with the quick filters (the "toggles" that used to be
@@ -798,17 +734,10 @@ if (await oitf.count()) {
   check("mobile: sheets are mutually exclusive", !(await sheetShown("ranking-sheet")));
   await mobile.screenshot({ path: path.join(OUT_DIR, "mobile-390-sheet-legend.png") });
 
-  await tab("trend").click();
-  await mobile.waitForTimeout(1200);
-  const charts = await mobile.locator(".recharts-wrapper").count();
-  check("mobile: trend tab renders the chart", charts === 1, `charts=${charts}`);
-  check("mobile: trend sheet is on screen", await sheetShown("trend-sheet"));
-  await mobile.screenshot({ path: path.join(OUT_DIR, "mobile-390-sheet-trend.png") });
-
   // Tapping the active tab again must close it, leaving the map alone.
-  await tab("trend").click();
+  await tab("legend").click();
   await mobile.waitForTimeout(700);
-  check("mobile: tapping the active tab closes its sheet", !(await sheetShown("trend-sheet")));
+  check("mobile: tapping the active tab closes its sheet", !(await sheetShown("legend-sheet")));
 
   // The weighbridge block has to survive the phone drawer too — it is the
   // densest thing in the app, and the mobile drawer is a bottom sheet rather

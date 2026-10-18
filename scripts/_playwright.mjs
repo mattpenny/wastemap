@@ -26,6 +26,20 @@ export async function loadPlaywright() {
   return await import(pathToFileURL(pwPath).href);
 }
 
+/**
+ * Headless Chrome has no GPU, so MapLibre GL's WebGL context would fail unless
+ * we force software rendering. Newer Chrome (>= 119) blocks SwiftShader WebGL
+ * by default and requires `--enable-unsafe-swiftshader` to opt in; the other
+ * flags pin ANGLE's SwiftShader backend. Without these the map never paints and
+ * every map-dependent verification fails.
+ */
+const WEBGL_ARGS = [
+  "--use-gl=angle",
+  "--use-angle=swiftshader",
+  "--enable-unsafe-swiftshader",
+  "--ignore-gpu-blocklist",
+];
+
 /** Launch Chromium, preferring an installed Chrome over the bundled build. */
 export async function launchChromium() {
   const mod = await loadPlaywright();
@@ -40,12 +54,16 @@ export async function launchChromium() {
 
   for (const exe of candidates) {
     try {
-      return await chromium.launch({ executablePath: exe, headless: true });
+      return await chromium.launch({
+        executablePath: exe,
+        headless: true,
+        args: WEBGL_ARGS,
+      });
     } catch {
       // try the next candidate
     }
   }
 
   // Last resort: Playwright's own bundled Chromium.
-  return chromium.launch({ headless: true });
+  return chromium.launch({ headless: true, args: WEBGL_ARGS });
 }
