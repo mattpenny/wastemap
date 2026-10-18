@@ -98,3 +98,30 @@ Verification: `tsc --noEmit` clean, browser suite 139/139, committed and pushed 
 `main` (`2a3a4d4`), auto-deployed to Vercel. An EOX Sentinel-2 cloudless basemap
 (seam-free everywhere but 10 m land) remains available as a future option if the
 user ever wants a second satellite style.
+
+## 8. Zoom-out black blocks (2026-10-18, shipped)
+
+**Symptom:** zooming out from a facility, dark near-black blocks flash at the outer
+edges of the map for ~1s before the normal colours render.
+
+**Reproduced on the live site** (`scripts/_zoomout-flash.mjs`): at t+0.3s the frame
+shows sharp tiles in the viewport centre with hard-edged dark regions at the edges —
+that is the satellite style's `background` paint `#1c3434` showing wherever the new
+wide-zoom imagery tiles have not landed yet. The deep tiles keep covering the centre
+during the flight while the outer ring is still on the wire.
+
+**Fix** (`src/components/map/mapStyles.ts`): a second raster source `imagery-low`
+(same Esri service, `maxzoom: 9`) plus a `satellite-low` layer painted directly above
+the background. MapLibre requests every layer's viewport tiles on first load, so the
+coarse tiles are cached before anyone zooms out; the gap then shows soft satellite
+instead of black. (z9 keeps the whole overshoot range — z15 down past the z10.6
+overview — within one or two tiny tiles.)
+
+**Deterministic A/B proof** (`scripts/_maptest.mjs` + `_maptest-baseline.mjs`,
+replaying the exact style spec standalone with deep tiles z≥10 aborted):
+- baseline (no underlay): large hard-edged `#1c3434` blocks at the edges — the
+  reported artefact, reproduced deterministically;
+- with underlay: same frame fully covered by coarse imagery, no dark blocks.
+
+Verification: `tsc --noEmit` clean; live site browser suite 139/139. Commits
+`1d9b5c0` (underlay) and `cf83750` (z9 refinement), auto-deployed to Vercel.
