@@ -187,15 +187,31 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
     [shown]
   );
 
+  // All three strategic landfills draw at ONE uniform pillar height — NENT's
+  // published rate. The per-site licences (WENT 6,400 / NENT 6,000 / SENT
+  // 2,000 tpd) mostly reflect headroom rather than what each site handles,
+  // and the taller WENT pillar visually dwarfed its neighbours.
+  const landfillTpd = useMemo(
+    () =>
+      facilities.find((f) => f.id === "landfill-nent")?.throughputTonnesPerDay ??
+      null,
+    [facilities]
+  );
+
   const heightFor = useCallback(
     (f: FacilityProperties) => {
       // Short neutral-height column means EPD publishes no per-site rate. Do
       // not turn N/A into zero or allocate the OITF system total to each pin.
       if (f.throughputTonnesPerDay === null) return MIN_HEIGHT_M * 0.55;
-      const norm = Math.sqrt(f.throughputTonnesPerDay / maxPublishedThroughput);
+      // Landfills share NENT's height; every other category keeps its own rate.
+      const effectiveTpd =
+        f.category === "Landfill" && landfillTpd !== null
+          ? landfillTpd
+          : f.throughputTonnesPerDay;
+      const norm = Math.sqrt(effectiveTpd / maxPublishedThroughput);
       return MIN_HEIGHT_M + norm * (MAX_HEIGHT_M - MIN_HEIGHT_M);
     },
-    [maxPublishedThroughput]
+    [maxPublishedThroughput, landfillTpd]
   );
 
   /**

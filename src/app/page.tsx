@@ -35,7 +35,7 @@ import {
   type FacilityProperties,
 } from "@/data/waste-facilities";
 import { CATEGORY_META, CATEGORY_ORDER } from "@/lib/categories";
-import { facilityHex } from "@/lib/facilityColors";
+import { facilityHex, rgbaFor } from "@/lib/facilityColors";
 import { t, type Lang } from "@/lib/i18n";
 import type { WeighbridgeStation } from "@/lib/weighbridge";
 import { loadWeighbridgeDataset } from "@/lib/weighbridgeClient";
@@ -833,6 +833,7 @@ export default function HomePage() {
                       /* ---- Collapsed group (e.g. the seven OITF sites) ---- */
                       if (entry.kind === "group") {
                         const meta = CATEGORY_META[entry.facilities[0].category];
+                        const groupAccent = facilityHex(entry.facilities[0]);
                         const isExpanded = expandedGroups.includes(entry.code);
                         return (
                           <li
@@ -870,6 +871,10 @@ export default function HomePage() {
                             >
                               <div className="flex items-center justify-between gap-2">
                                 <span className="flex min-w-0 items-center gap-1.5">
+                                  <span
+                                    className="h-2 w-2 shrink-0 rounded-full ring-1 ring-white/20"
+                                    style={{ backgroundColor: groupAccent }}
+                                  />
                                   <ScrollingName
                                     className="text-[length:calc(11.5px*var(--fs))] font-medium text-white/85"
                                     text={lang === "zh" ? entry.nameZh : entry.nameEn}
@@ -906,8 +911,11 @@ export default function HomePage() {
                               {entry.total !== null && (
                                 <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-white/8">
                                   <div
-                                    className="h-full rounded-full bg-emerald-400/60 transition-all duration-500"
-                                    style={{ width: `${(entry.total / maxRankingIntake) * 100}%` }}
+                                    className="h-full rounded-full transition-all duration-500"
+                                    style={{
+                                      width: `${(entry.total / maxRankingIntake) * 100}%`,
+                                      backgroundColor: rgbaFor(groupAccent, 0.6),
+                                    }}
                                   />
                                 </div>
                               )}
@@ -954,8 +962,7 @@ export default function HomePage() {
 
                       /* ---------------- Single facility ---------------- */
                       const facility = entry.facility;
-                      const meta = CATEGORY_META[facility.category];
-                      const accent = meta.hex;
+                      const accent = facilityHex(facility);
                       const isActive = selectedId === facility.id;
                       return (
                         <li
@@ -971,6 +978,10 @@ export default function HomePage() {
                           >
                             <div className="flex items-center justify-between gap-2">
                               <span className="flex min-w-0 items-center gap-1.5">
+                                <span
+                                  className="h-2 w-2 shrink-0 rounded-full ring-1 ring-white/20"
+                                  style={{ backgroundColor: accent }}
+                                />
                                 <ScrollingName
                                   className="text-[length:calc(11.5px*var(--fs))] font-medium text-white/85"
                                   text={lang === "zh" ? facility.nameZh : facility.nameEn}
@@ -992,8 +1003,11 @@ export default function HomePage() {
                             {entry.total !== null && (
                               <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-white/8">
                                 <div
-                                  className="h-full rounded-full bg-emerald-400/60 transition-all duration-500"
-                                  style={{ width: `${(entry.total / maxRankingIntake) * 100}%` }}
+                                  className="h-full rounded-full transition-all duration-500"
+                                  style={{
+                                    width: `${(entry.total / maxRankingIntake) * 100}%`,
+                                    backgroundColor: rgbaFor(accent, 0.6),
+                                  }}
                                 />
                               </div>
                             )}
