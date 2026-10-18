@@ -22,6 +22,15 @@
  *         Fields used: 日期, 交收狀態, 車輛任務, 物料重量, 廢物類別, 來源,
  *         StationId. (賬戶號碼 and 車牌 are deliberately never read — they are
  *         only collected to prove they did not leak into the output.)
+ *
+ *         Exports are monthly (wkts202610.json = October 2026). They are NOT
+ *         kept monthly in the output: every file for a station is merged, then
+ *         re-split by calendar year, so `WKTS/2026.json` holds all of 2026 and
+ *         the app re-slices it by date. Each run is a full rebuild from the
+ *         files on disk — never incremental — so the folder must stay complete:
+ *         deleting a month's file after ingesting removes that month from the
+ *         aggregate, and keeping two copies of a month counts it twice (which
+ *         is reported, see `overlaps` below).
  * Output  src/data/weighbridge/ — split layout, aggregates only (no account
  *         numbers, no licence plates, safe to commit):
  *
@@ -51,6 +60,11 @@
  *      (case) are the same category and must not be two rows.
  *   4. Group by station, then by day, waste type, source district and vehicle
  *      task.
+ *   5. Merge every monthly file for a station, then re-split the days by
+ *      calendar year. If two files claim the same date they are both counted —
+ *      nothing in a weigh-in row distinguishes a re-sent copy from a real
+ *      second delivery — but the overlap is reported with both filenames, so
+ *      it cannot pass as a real increase in tonnage.
  *
  * The waste-type and district breakdowns are emitted **per day as well as for
  * the period** (`daily[].wasteTypes` / `daily[].districts`). That is what lets
@@ -450,8 +464,20 @@ function addRow(row, folderStation, rel) {
       districtZh: new Map(),
       gtwByTask: 0,
       gtwByCode: 0,
+      // Which export each counted date came from, and the dates claimed by
+      // more than one file. Monthly exports are merged into one year file, so
+      // a re-sent or copied month is the one way to double-count silently.
+      dayFile: new Map(),
+      overlaps: new Set(),
     };
     stations.set(stationId, station);
+  }
+
+  const sameDay = station.dayFile.get(iso);
+  if (!sameDay) {
+    station.dayFile.set(iso, rel);
+  } else if (sameDay !== rel) {
+    station.overlaps.add(`${iso} appears in ${sameDay} and ${rel}`);
   }
 
   station.wasteDescZh.set(wasteCode, wasteZh);
@@ -555,6 +581,17 @@ for (const [stationId, s] of [...stations].sort(([a], [b]) => a.localeCompare(b)
   if (s.gtwByTask !== s.gtwByCode) {
     warnings.push(
       `${stationId}: ${s.gtwByTask} loads arrive on grease vehicles but ${s.gtwByCode} carry a GTW waste code — check the stream/type mapping.`
+    );
+  }
+
+  // A date claimed by two files means those rows were counted twice, and no
+  // downstream figure can tell. Naming the files is the only way to fix it.
+  if (s.overlaps.size > 0) {
+    const examples = [...s.overlaps].sort().slice(0, 3);
+    warnings.push(
+      `${stationId}: ${s.overlaps.size} date(s) appear in more than one export, so their rows are counted twice — ` +
+        `${examples.join("; ")}${s.overlaps.size > examples.length ? "; …" : ""}. ` +
+        `Keep one file per month and remove re-sent copies.`
     );
   }
 

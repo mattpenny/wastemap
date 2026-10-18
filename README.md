@@ -115,6 +115,18 @@ collapses the seven facilities into one group row and EPD publishes only a
 combined ~90 t/d figure, so there is no per-site facility to attach data to.
 Rows filed there are reported and skipped rather than guessed at.
 
+Exports arrive **monthly** (`wkts202610.json` is October 2026), but the output is
+**yearly**: every file for a station is merged and re-split by calendar year, so
+`WKTS/2026.json` holds the whole of 2026 and the app slices it by date. Each run
+is a **full rebuild** from the files on disk, never incremental — so the folder
+has to stay complete. Remove a month's file and that month leaves the aggregate;
+keep a re-sent copy alongside the original and it is counted twice (the ingest
+reports the overlapping dates, with both filenames, in `meta.warnings`).
+
+Adding a month is therefore: drop `wkts202611.json` into `data/WKTS/`, run
+`npm run ingest`, commit the regenerated `src/data/weighbridge/` and
+`public/weighbridge/`. The app needs no change.
+
 ## Features
 
 - 3D pillars via MapLibre GL + deck.gl, with a pitch/bearing view of Hong Kong.
