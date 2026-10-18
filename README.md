@@ -84,10 +84,36 @@ Coverage today is **WKTS, 1–15 October 2026**: 12,015 weigh-ins, 50,033 t,
 (7,526 t over the period, 15.0% of its intake), and the UI says so.
 
 Raw exports live in `data/` and are **gitignored** — they carry account numbers
-and licence plates. `npm run ingest` reduces them to `src/data/weighbridge.json`
-(about 7 KB, aggregates only) and aborts if any account number or plate survives
-into the output. The same row format works for every RTS, so adding a station is
-a matter of dropping its export into `data/` and re-running the ingest.
+and licence plates. Each station gets **its own folder**, so a drop is
+self-describing:
+
+```
+data/
+  WKTS/     wkts202610.json      ┐
+  IETS/                          │ six standalone RTS
+  IWTS/                          │
+  STTS/                          │
+  NLTS/                          │
+  NWNTTS/                        ┘
+  NENT/                          ┐ landfills
+  WENT/                          ┘
+  HKIWMF/                        I·PARK1
+  OITF/                          the seven outlying-island facilities, one folder
+```
+
+`npm run ingest` walks those folders recursively (so `WKTS/2026/10/…` works
+too), reduces everything to `src/data/weighbridge/` — `index.json` plus
+`<STATION>/meta.json` and `<STATION>/<YEAR>.json`, aggregates only — and aborts
+if any account number or plate survives into the output. The folder decides
+which station a file belongs to; the rows' own `StationId` is cross-checked
+against it, and a disagreement is reported rather than silently resolved. The
+ingest creates any missing station folder, so adding a station is a matter of
+dropping its export into its folder and re-running it.
+
+`OITF` is deliberately a **single** folder with no per-site subfolders: the app
+collapses the seven facilities into one group row and EPD publishes only a
+combined ~90 t/d figure, so there is no per-site facility to attach data to.
+Rows filed there are reported and skipped rather than guessed at.
 
 ## Features
 
@@ -245,7 +271,7 @@ src/components/ui/     Drawer, weighbridge block, trend panel, legend chrome
 src/data/              Facility dataset, provenance, HK-wide trend, weighbridge aggregate
 src/lib/               Category metadata, i18n, weighbridge types, formatting helpers
 scripts/               Ingest + verification scripts and shared Playwright loader
-data/                  Raw weighbridge exports (gitignored — see the data section)
+data/                  Raw weighbridge exports, one folder per station (gitignored)
 docs/                  Screenshots used by this README
 ```
 
@@ -255,14 +281,18 @@ presentational.
 ### Regenerating the weighbridge aggregate
 
 ```bash
-# drop the operator's export(s) into data/, then:
+# drop the operator's export(s) into the station's folder, e.g. data/WKTS/, then:
 npm run ingest
 ```
 
 The script keeps 完成 weigh-ins, normalises the waste-type codes, separates the
-station's own maintenance loads, and writes `src/data/weighbridge.json`. It
-refuses to write if any account number or licence plate from the input appears
-in the output. The same row format works for every RTS.
+station's own maintenance loads, and writes the split layout under
+`src/data/weighbridge/` (`index.json` + `<STATION>/meta.json` +
+`<STATION>/<YEAR>.json`), mirroring it into `public/weighbridge/` for the
+client-side loader. It refuses to write if any account number or licence plate
+from the input appears in the output. The same row format works for every RTS,
+and the ingest prints a per-folder file count so an empty or mis-filed folder is
+visible before it becomes a wrong number on the map.
 
 ## Tech
 

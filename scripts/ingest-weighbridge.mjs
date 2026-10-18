@@ -2,9 +2,26 @@
 /**
  * Ingest raw RTS weighbridge exports into the split aggregate the app serves.
  * -------------------------------------------------------------------------
- * Input   data/*.json — raw station weighbridge exports, one row per weigh-in.
+ * Input   data/<STATION>/*.json — raw station weighbridge exports, one row per
+ *         weigh-in, filed under the station's own folder so a drop is
+ *         self-describing:
+ *
+ *           data/WKTS/wkts202610.json
+ *           data/IETS/iets202610.json
+ *           data/HKIWMF/hkiwmf202610.json
+ *
+ *         Folders are discovered recursively, so `data/WKTS/2026/10/…` works
+ *         too, and a stray file left at the data root is still read (its rows
+ *         are attributed from StationId) for backwards compatibility.
+ *         Recognised folders: WKTS IETS IWTS STTS NLTS NWNTTS (the six
+ *         standalone RTS), NENT WENT (landfills), HKIWMF (I·PARK1), and OITF
+ *         (the seven outlying-island facilities, kept as ONE folder — the app
+ *         collapses them into a single group row, so there are no per-site
+ *         folders and no per-site facility to attach data to).
+ *
  *         Fields used: 日期, 交收狀態, 車輛任務, 物料重量, 廢物類別, 來源,
- *         StationId. (賬戶號碼 and 車牌 are deliberately never read.)
+ *         StationId. (賬戶號碼 and 車牌 are deliberately never read — they are
+ *         only collected to prove they did not leak into the output.)
  * Output  src/data/weighbridge/ — split layout, aggregates only (no account
  *         numbers, no licence plates, safe to commit):
  *
@@ -18,6 +35,11 @@
  *         for the loader and `src/lib/weighbridge.ts` for the types.
  *
  * Rules, in the order they are applied:
+ *   0. Attribute each file to a station from the folder it sits in, then
+ *      cross-check the rows' own StationId. If the two disagree the row wins
+ *      (it is the operator's label for the weighbridge) and the mismatch is
+ *      reported, because a silently mis-filed export would otherwise move
+ *      tonnage to the wrong facility.
  *   1. Keep 交收狀態 === "完成" only. 取消 / 拒絕 rows are counted and reported
  *      in `meta.excluded`, never summed.
  *   2. Split each row into a *stream* from 車輛任務: private (P99), public
@@ -50,16 +72,34 @@ const DATA_DIR = path.join(ROOT, "data");
 const OUT_ROOT = path.join(ROOT, "src", "data", "weighbridge");
 
 // ---------------------------------------------------------------------------
-// Station code -> facility id in src/data/waste-facilities.ts
+// Station registry: folder name -> facility id in src/data/waste-facilities.ts
 // ---------------------------------------------------------------------------
-// The six standalone RTS. OITF substations are not weighbridge stations.
-const STATION_TO_FACILITY = {
-  WKTS: "rts-west-kowloon",
-  IETS: "rts-island-east",
-  IWTS: "rts-island-west",
-  STTS: "rts-shatin",
-  NLTS: "rts-north-lantau",
-  NWNTTS: "rts-nwnt",
+// The folder name under `data/` is the station code, and it is the thing the
+// operator files against. `facilityId` is what the map keys on, so this table
+// is the single join between "a folder of exports" and "a site on the map".
+//
+// `kind` is documentation only — it keeps the list readable and lets the
+// report group the folders the way the legend does.
+const STATIONS = {
+  // Six standalone RTS, one weighbridge each.
+  WKTS: { facilityId: "rts-west-kowloon", kind: "rts" },
+  IETS: { facilityId: "rts-island-east", kind: "rts" },
+  IWTS: { facilityId: "rts-island-west", kind: "rts" },
+  STTS: { facilityId: "rts-shatin", kind: "rts" },
+  NLTS: { facilityId: "rts-north-lantau", kind: "rts" },
+  NWNTTS: { facilityId: "rts-nwnt", kind: "rts" },
+
+  // The seven outlying-island transfer facilities are ONE group in the app:
+  // EPD publishes only a combined ~90 t/d figure and the ranking card collapses
+  // them into a single row, so there is no per-site facility id to attach a
+  // weighbridge station to. The folder is reserved for a combined export; rows
+  // filed here are reported and skipped rather than guessed at.
+  OITF: { facilityId: null, kind: "group" },
+
+  // Landfills and I·PARK1 — no exports yet, folders reserved for future drops.
+  NENT: { facilityId: "landfill-nent", kind: "landfill" },
+  WENT: { facilityId: "landfill-went", kind: "landfill" },
+  HKIWMF: { facilityId: "ipark-shek-kwu-chau", kind: "ipark" },
 };
 
 // ---------------------------------------------------------------------------
@@ -193,6 +233,19 @@ function bump(map, key, tonnes) {
   map.set(key, entry);
 }
 
+/**
+ * Remember the identifiers on a row so the finished aggregate can be checked
+ * against them. Values repeat heavily (one haulier, many loads), so the set
+ * stays small; the point is to be able to prove none of them was copied into
+ * the output, not to keep the raw records.
+ */
+function noteIdentifiers(row) {
+  for (const key of ["賬戶號碼", "車牌"]) {
+    const value = String(row[key] ?? "").trim();
+    if (value.length >= 4) identifiers.add(value);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Aggregation state (declared up front: rows are aggregated file-by-file)
 // ---------------------------------------------------------------------------
@@ -200,50 +253,151 @@ const excluded = {
   notCompleted: { records: 0, tonnes: 0, byStatus: {} },
   unparseableWeight: 0,
   unknownStation: 0,
+  noFacility: 0,
 };
 const stations = new Map();
+
+/** Station codes seen in the files' own StationId, so we can report drift. */
+const seenRowStations = new Set();
+/** Files whose station had to be taken from the folder (rows had no usable id). */
+const attributedByFolder = new Set();
+/** `${folder} folder holds ${rowStation} rows` — one entry per distinct pair. */
+const folderMismatches = new Set();
+/** Folders that are not in STATIONS — reported, then resolved from StationId. */
+const unknownFolders = new Set();
+/** Account numbers / plates seen, kept only to prove none reached the output. */
+const identifiers = new Set();
 
 // ---------------------------------------------------------------------------
 // Read the raw exports
 // ---------------------------------------------------------------------------
-if (!fs.existsSync(DATA_DIR)) {
-  console.error(`No ${path.relative(ROOT, DATA_DIR)}/ directory — nothing to ingest.`);
-  process.exit(1);
+// One folder per station, discovered recursively. A file's station comes from
+// the folder it lives in; the row's StationId is a cross-check, not the source
+// of truth — the point of the folder layout is that filing an export is enough
+// to place it.
+//
+// The folder skeleton is part of the contract, so create any missing folder
+// rather than making the operator read this file to learn the names. `data/`
+// is gitignored (raw exports carry account numbers and plates), so a fresh
+// clone has none of them and the first ingest is what puts them on disk.
+for (const code of Object.keys(STATIONS)) {
+  fs.mkdirSync(path.join(DATA_DIR, code), { recursive: true });
 }
 
-const files = fs
-  .readdirSync(DATA_DIR)
-  .filter((f) => f.toLowerCase().endsWith(".json"))
-  .sort();
+/** Every .json under `dir`, at any depth, sorted for a stable run order. */
+function findExports(dir) {
+  const found = [];
+  const walk = (current) => {
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+      } else if (entry.name.toLowerCase().endsWith(".json")) {
+        found.push(full);
+      }
+    }
+  };
+  walk(dir);
+  return found.sort();
+}
+
+/**
+ * The station folder a file sits in, or null when it is at the data root.
+ * Only the first path segment counts, so `WKTS/2026/10/…` is still WKTS.
+ */
+function folderStationFor(absPath) {
+  const parts = path.relative(DATA_DIR, absPath).split(path.sep);
+  if (parts.length < 2) return null;
+  return parts[0].trim().toUpperCase();
+}
+
+const files = findExports(DATA_DIR);
 
 if (files.length === 0) {
-  console.error(`No .json files in ${path.relative(ROOT, DATA_DIR)}/ — nothing to ingest.`);
+  console.error(
+    `No .json files under ${path.relative(ROOT, DATA_DIR)}/ — nothing to ingest.\n` +
+      `Drop the operator's exports into a station folder, e.g. ` +
+      `${path.relative(ROOT, DATA_DIR)}/WKTS/wkts202610.json, then run this again.`
+  );
   process.exit(1);
 }
 
-for (const file of files) {
-  const full = path.join(DATA_DIR, file);
+// Which folders exist, including empty ones — the report shows the whole
+// skeleton so a folder the operator has prepared but not filled yet is
+// visibly "empty" rather than just missing from the output.
+const foldersSeen = {};
+for (const entry of fs.readdirSync(DATA_DIR, { withFileTypes: true })) {
+  if (entry.isDirectory()) foldersSeen[entry.name.trim().toUpperCase()] = 0;
+}
+const sourceFiles = [];
+for (const full of files) {
+  const code = folderStationFor(full) ?? "(root)";
+  foldersSeen[code] = (foldersSeen[code] ?? 0) + 1;
+}
+
+for (const full of files) {
+  const rel = path.relative(ROOT, full).split(path.sep).join("/");
   let parsed;
   try {
     parsed = JSON.parse(fs.readFileSync(full, "utf-8"));
   } catch (err) {
-    console.error(`  ! ${file}: not valid JSON (${err.message}) — skipped`);
+    console.error(`  ! ${rel}: not valid JSON (${err.message}) — skipped`);
     continue;
   }
   if (!Array.isArray(parsed)) {
-    console.error(`  ! ${file}: expected an array of rows — skipped`);
+    console.error(`  ! ${rel}: expected an array of rows — skipped`);
     continue;
   }
+  const folderStation = folderStationFor(full);
   // Aggregate straight into the accumulators and let the parsed array go, so
   // memory stays bounded to one file even with years of monthly exports.
-  for (const r of parsed) addRow(r);
-  console.log(`  read ${file}: ${parsed.length} rows`);
+  for (const r of parsed) {
+    noteIdentifiers(r);
+    addRow(r, folderStation, rel);
+  }
+  sourceFiles.push(rel);
+  console.log(
+    `  read ${rel}: ${parsed.length} rows` +
+      (folderStation ? ` (folder ${folderStation})` : " (no station folder)")
+  );
 }
 
 // ---------------------------------------------------------------------------
 // Aggregate one row (called per row as each file is read)
 // ---------------------------------------------------------------------------
-function addRow(row) {
+
+/**
+ * Which station a row belongs to.
+ *
+ * The folder is the operator's filing decision and the reason this script
+ * walks subdirectories at all; StationId is the operator's own label on the
+ * weighbridge that produced the row. They normally agree. When they do not,
+ * the row wins — a folder is one keystroke away from being wrong, while the
+ * row travelled with the data — and the mismatch is reported so the folder
+ * can be fixed. A row with no usable StationId (a landfill export may not
+ * carry one) falls back to the folder it was filed in.
+ */
+function resolveStation(rowStation, folderStation, rel) {
+  const rowKnown = rowStation && STATIONS[rowStation] ? rowStation : null;
+  const folderKnown = folderStation && STATIONS[folderStation] ? folderStation : null;
+
+  if (folderStation && !folderKnown) unknownFolders.add(folderStation);
+
+  if (rowKnown) {
+    seenRowStations.add(rowStation);
+    if (folderKnown && folderKnown !== rowKnown) {
+      folderMismatches.add(`${folderKnown}/ holds ${rowStation} rows`);
+    }
+    return rowKnown;
+  }
+  if (folderKnown) {
+    attributedByFolder.add(rel);
+    return folderKnown;
+  }
+  return null;
+}
+
+function addRow(row, folderStation, rel) {
   const status = String(row["交收狀態"] ?? "").trim();
   const weight = toNumber(row["物料重量"]);
 
@@ -259,9 +413,16 @@ function addRow(row) {
     return;
   }
 
-  const stationId = String(row["StationId"] ?? "").trim();
-  if (!STATION_TO_FACILITY[stationId]) {
+  const rowStation = String(row["StationId"] ?? "").trim().toUpperCase();
+  const stationId = resolveStation(rowStation, folderStation, rel);
+  if (!stationId) {
     excluded.unknownStation += 1;
+    return;
+  }
+  const facilityId = STATIONS[stationId].facilityId;
+  if (!facilityId) {
+    // A reserved group folder (OITF) has no single facility to attach to.
+    excluded.noFacility += 1;
     return;
   }
 
@@ -277,7 +438,7 @@ function addRow(row) {
   if (!station) {
     station = {
       stationId,
-      facilityId: STATION_TO_FACILITY[stationId],
+      facilityId,
       days: new Map(),
       streams: new Map(),
       tasks: new Map(),
@@ -362,7 +523,12 @@ const out = {
     sourceZh: "由營運方提供的轉運站地磅記錄（逐次過磅）。",
     statusKept: "完成",
     generatedAt: new Date().toISOString(),
-    sourceFiles: files,
+    // Paths relative to the repo root, folder included, so a figure in the
+    // app can be traced back to the exact export it came from.
+    sourceFiles,
+    // Which station folders were present at ingest time, and how many files
+    // each held (0 = folder prepared but still empty).
+    folders: foldersSeen,
     stations: [...stations.keys()].sort(),
     excluded: {
       notCompletedRecords: excluded.notCompleted.records,
@@ -370,6 +536,7 @@ const out = {
       notCompletedByStatus: excluded.notCompleted.byStatus,
       unparseableWeight: excluded.unparseableWeight,
       unknownStation: excluded.unknownStation,
+      noFacility: excluded.noFacility,
       noteEn:
         "Only 完成 (completed) weigh-ins are counted. Cancelled and rejected weigh-ins are excluded, as is the station's own maintenance-vehicle tonnage.",
       noteZh:
@@ -488,10 +655,57 @@ for (const [stationId, s] of [...stations].sort(([a], [b]) => a.localeCompare(b)
   if (gtw) console.log(`      GTW: ${gtw.loads} loads, ${gtw.tonnes.toLocaleString()} t`);
 }
 
+// Folder findings join the station-level warnings: a mis-filed export is the
+// same class of problem as a mismatched stream/type mapping — quiet, and it
+// moves tonnage to the wrong place.
+for (const f of [...folderMismatches].sort()) {
+  warnings.push(`${f} — attributed to the row's StationId; move the export to the matching folder.`);
+}
+for (const f of [...unknownFolders].sort()) {
+  warnings.push(
+    `data/${f}/ is not a known station folder — its rows were attributed from StationId only.`
+  );
+}
+if (attributedByFolder.size > 0) {
+  warnings.push(
+    `${attributedByFolder.size} file(s) carried no usable StationId and were attributed by folder: ` +
+      [...attributedByFolder].sort().join(", ")
+  );
+}
+if (excluded.noFacility > 0) {
+  warnings.push(
+    `${excluded.noFacility} row(s) were filed in a group folder (OITF) that has no single facility to attach to and were skipped.`
+  );
+}
+
 if (warnings.length > 0) {
   out.meta.warnings = warnings;
   console.log("\nWarnings:");
   for (const w of warnings) console.log(`  ! ${w}`);
+}
+
+// ---------------------------------------------------------------------------
+// Folder report
+// ---------------------------------------------------------------------------
+// The folder skeleton is the filing system now, so say which folders were read
+// and which are still empty. An empty folder is normal (a site with no export
+// yet) — it is only a problem if it stays empty when you expected data.
+console.log("\nStation folders:");
+for (const [code, count] of Object.entries(foldersSeen).sort()) {
+  if (code === "(root)") continue;
+  const known = STATIONS[code];
+  console.log(
+    `  data/${code}/`.padEnd(16) +
+      `${String(count).padStart(3)} file${count === 1 ? "" : "s"}` +
+      (count === 0 ? "  (empty)" : "") +
+      (known ? "" : "  <- not a known station folder")
+  );
+}
+if (foldersSeen["(root)"] > 0) {
+  console.log(
+    `  data/ root      ${String(foldersSeen["(root)"]).padStart(3)} file(s) ` +
+      `— attributed from StationId; move them into a station folder`
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -545,18 +759,15 @@ console.log("\nReconciled: per-day breakdowns sum to the period totals for every
 // ---------------------------------------------------------------------------
 // Safety: the aggregate must not carry any account number or licence plate.
 // ---------------------------------------------------------------------------
+// Every identifier seen while reading was collected in `identifiers`; if any of
+// them appears anywhere in the serialised aggregate, a field has been copied
+// through that should only have been aggregated.
 const serialised = JSON.stringify(out);
-const leaked = new Set();
-for (const row of rows) {
-  for (const key of ["賬戶號碼", "車牌"]) {
-    const v = String(row[key] ?? "").trim();
-    if (v.length >= 4 && serialised.includes(v)) leaked.add(`${key}=${v}`);
-  }
-  if (leaked.size > 0) break;
-}
-if (leaked.size > 0) {
+const leaked = [...identifiers].filter((v) => serialised.includes(v));
+if (leaked.length > 0) {
   console.error(
-    `\nABORT: the aggregate appears to contain identifier data: ${[...leaked].join(", ")}`
+    `\nABORT: the aggregate appears to contain identifier data (${leaked.length} value(s), ` +
+      `e.g. ${leaked.slice(0, 3).join(", ")})`
   );
   process.exit(1);
 }

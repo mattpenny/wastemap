@@ -3,10 +3,22 @@
     "source": "Station weighbridge exports supplied by the operator (per-weigh-in records).",
     "sourceZh": "由營運方提供的轉運站地磅記錄（逐次過磅）。",
     "statusKept": "完成",
-    "generatedAt": "2026-10-16T23:49:20.001Z",
+    "generatedAt": "2026-10-18T14:07:59.009Z",
     "sourceFiles": [
-      "wkts202610.json"
+      "data/WKTS/wkts202610.json"
     ],
+    "folders": {
+      "HKIWMF": 0,
+      "IETS": 0,
+      "IWTS": 0,
+      "NENT": 0,
+      "NLTS": 0,
+      "NWNTTS": 0,
+      "OITF": 0,
+      "STTS": 0,
+      "WENT": 0,
+      "WKTS": 1
+    },
     "stations": [
       "WKTS"
     ],
@@ -19,6 +31,7 @@
       },
       "unparseableWeight": 0,
       "unknownStation": 0,
+      "noFacility": 0,
       "noteEn": "Only 完成 (completed) weigh-ins are counted. Cancelled and rejected weigh-ins are excluded, as is the station's own maintenance-vehicle tonnage.",
       "noteZh": "只計算「完成」的過磅記錄；「取消」及「拒絕」記錄，以及轉運站自身維護車的噸數，均不計入。"
     }

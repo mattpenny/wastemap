@@ -195,7 +195,14 @@ export interface WeighbridgeMeta {
   /** Only weigh-ins with this 交收狀態 are counted. */
   statusKept: string;
   generatedAt: string;
+  /** Export paths relative to the repo root, station folder included. */
   sourceFiles: string[];
+  /**
+   * Station folders present at ingest time and how many files each held.
+   * `0` means the folder is prepared but still empty; a code absent from this
+   * map is a folder that does not exist. `(root)` counts loose files.
+   */
+  folders?: Record<string, number>;
   stations: string[];
   excluded: {
     notCompletedRecords: number;
@@ -203,6 +210,8 @@ export interface WeighbridgeMeta {
     notCompletedByStatus: Record<string, number>;
     unparseableWeight: number;
     unknownStation: number;
+    /** Rows filed in a group folder (OITF) with no single facility to attach to. */
+    noFacility?: number;
     noteEn: string;
     noteZh: string;
   };

@@ -51,4 +51,9 @@ next-env.d.ts
 # repo. The ingest script writes an aggregate with neither, into the split
 # layout under src/data/weighbridge/ (index.json + per-station meta.json +
 # per-year JSON), and THAT is what gets committed.
+#
+# One folder per station: WKTS IETS IWTS STTS NLTS NWNTTS (RTS), NENT WENT
+# (landfills), HKIWMF (I·PARK1), OITF (all seven outlying-island sites, one
+# folder). `npm run ingest` creates any that are missing, so the skeleton does
+# not need to be tracked here.
 /data/
