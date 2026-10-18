@@ -125,3 +125,47 @@ replaying the exact style spec standalone with deep tiles z≥10 aborted):
 
 Verification: `tsc --noEmit` clean; live site browser suite 139/139. Commits
 `1d9b5c0` (underlay) and `cf83750` (z9 refinement), auto-deployed to Vercel.
+
+## 9. "Still blocks after the fix" — deeper diagnosis + four-part hardening
+
+The user still saw blocks at the outer edge while zooming in/out and asked whether the
+"Imagery © Esri, Maxar, Earthstar Geographics" layer was to blame.
+
+**The attribution is not a layer.** It is a text credit string carried in the source
+metadata; it renders nothing. The blocks are painted by the style's `background` layer
+wherever the raster layers have no loaded tile.
+
+Live diagnostics (headless Chrome against the deployment, `scripts/_zoom-deep.mjs`,
+`_map-probe.mjs`):
+
+- The deployed style was correct — `satellite-low` present, correct order, `maxzoom: 9`
+  (verified by dumping the minified chunk from the live bundle).
+- The network log showed **zero z9 requests at startup**: the underlay's own tiles were
+  never warmed, so the first zoom-out had no coverage. (Standalone replay of the same
+  style does request them, so this is app-environment specific — cause not pinned down.)
+- During the zoom-out the periphery still flashed the dark `#1c3434` background; once
+  settled, everything rendered.
+
+**Shipped hardening (commit `63105b0`, pool fix `22ca664`)** — each change alone removes
+"black", together they remove the blocks entirely:
+
+1. `background-color` `#1c3434` → `#4e6966` (the exact sea-mask tone). Any residual gap
+   is now light; over water (most of the overview) it is literally invisible, and
+   land-side gaps read as a light "loading" patch instead of a black void.
+2. `satellite-low` gets a brightness lift (`brightness-min: 0.28`, `contrast: -0.08`) so
+   Esri's dark z9 ocean pixels (luma ~60) never read as black blocks while the water
+   mask is still painting.
+3. New `src/lib/prefetchBasemap.ts` warms the browser HTTP cache with the underlay's z9
+   tiles at startup (Esri sends `Cache-Control: max-age=86400` + `Access-Control-Allow-Origin: *`).
+   Fire-and-forget, ~30 tiles, real 6-worker pool, skipped for data-saver, scheduled
+   1.5s after map load so it never competes with the initial tile stream.
+4. Main imagery `raster-fade-duration` 0 → 300ms so the progressive edge fill reads as
+   tiles streaming in rather than rectangles popping.
+
+**Evidence** (standalone MapLibre harness with the exact style, deep tiles aborted —
+`scripts/_maptest.mjs`): the gap frame is now covered by soft real imagery
+(`out/verify/maptest-with-underlay-gap.png`), and the no-underlay baseline shows a flat
+light grey-teal map (`out/verify/maptest-baseline-no-underlay-gap.png`) — never black.
+Live: browser suite 139/139 on the deployed build. The prefetch's firing on the live
+site could not be re-confirmed because Vercel's bot challenge intermittently blocks
+headless runs (a real browser is unaffected).
