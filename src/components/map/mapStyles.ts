@@ -128,17 +128,18 @@ export function satelliteStyle(): StyleSpecification {
       // zoom-out the sharp deep-zoom tiles keep covering the centre of the
       // viewport while the new wide tiles for the outer ring are still on the
       // wire — without this layer that ring shows the dark `background` paint
-      // as black blocks at the edges. One z8 tile covers all of Hong Kong, so
-      // it lands almost immediately and the gap reads as (softer) satellite
-      // imagery instead of a black flash. Same Esri service, capped at z8 so
-      // each tile is tiny.
+      // as black blocks at the edges. These coarse tiles are requested on the
+      // very first load (MapLibre loads every layer's viewport tiles), so by
+      // the time anyone zooms out they are already cached and the gap shows
+      // soft satellite instead of a black flash. Same Esri service, capped at
+      // z9 — one tile covers most of the viewport at any wide zoom.
       "imagery-low": {
         type: "raster",
         tiles: [
           "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
         ],
         tileSize: 256,
-        maxzoom: 8,
+        maxzoom: 9,
       },
       labels: {
         type: "raster",
