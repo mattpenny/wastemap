@@ -1,8 +1,11 @@
 import type { StyleSpecification } from "maplibre-gl";
 
-/** Flat sea colour for the water mask — muted grey-teal, sampled from the
- * natural satellite-sea tone the user preferred (#4e6966) rather than the
- * original darker blue-teal #1a4a60. */
+/**
+ * Fill for the WebGL background — the colour painted wherever no satellite
+ * tile has arrived yet. Sampled from Esri's wide-view sea over Hong Kong, so a
+ * gap over water is invisible and a gap over land is a light "loading" patch
+ * rather than a black block.
+ */
 const SEA_COLOR = "#4e6966";
 
 /**
@@ -103,24 +106,40 @@ export function satelliteStyle(): StyleSpecification {
   return {
     version: 8,
     sources: {
+      // Two declarations of the same Esri service, differing only in the
+      // declared tile size. MapLibre picks the tile zoom from that number, so
+      // one fetches a level deeper than the other:
+      //
+      //   imagery-wide  256 -> camera z10 fetches z10 tiles. At the wide view
+      //                 those are the uniform, richly coloured tiles — the sea
+      //                 reads as real water with no tone steps, because the
+      //                 whole harbour falls inside one or two of them.
+      //   imagery       128 -> camera z12 fetches z13. Half the real 256px
+      //                 image is drawn into the same area, i.e. 2x
+      //                 supersampling, which is what keeps land crisp once you
+      //                 are close enough to care.
+      //
+      // Only one is visible at a time; they cross-fade between z11.5 and z12.5
+      // (see the two raster layers). Using 128 at the wide end was the original
+      // bug: it pulled z11/z12 tiles whose adjacent mosaic passes differ in
+      // tone, which showed up as large parallelograms over the water. That was
+      // hidden with an opaque sea fill, which also threw away the sea's detail —
+      // the two-source split fixes the cause instead.
       imagery: {
         type: "raster",
         tiles: [
           "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
         ],
-        // Declared as 128 (half the real 256px image size) on purpose — see the
-        // note on the `satellite` layer below. MapLibre then fetches one zoom
-        // level deeper and 2x supersamples, which pulls the sharp, bright z13+
-        // aerial instead of the dark coarse z11/z12 mosaic.
-        //
-        // NOTE: this only fixes LAND sharpness. The large, tone-shifted
-        // parallelograms over the water are baked into Esri's World Imagery
-        // source itself (adjacent mosaic tiles are different satellite passes
-        // — one overcast/grey, one clear/teal). Verified by exporting the raw
-        // Esri image for the harbour with no app code involved: the seam is in
-        // the source pixels. Fetching deeper zooms (tileSize 64 → z14) does not
-        // remove it, so 128 is kept as the perf/sharpness balance.
         tileSize: 128,
+        maxzoom: 19,
+        attribution: ESRI_ATTRIBUTION,
+      },
+      "imagery-wide": {
+        type: "raster",
+        tiles: [
+          "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        ],
+        tileSize: 256,
         maxzoom: 19,
         attribution: ESRI_ATTRIBUTION,
       },
@@ -149,15 +168,6 @@ export function satelliteStyle(): StyleSpecification {
         tileSize: 256,
         maxzoom: 19,
       },
-      // High-resolution OSM water polygons (OpenFreeMap, key-less) used to
-      // paint a flat sea over the imagery. `url` fetches the TileJSON, which
-      // carries the versioned tile template; maxzoom 12 keeps tiles light
-      // (overzoomed above z12, plenty for a flat sea).
-      openmaptiles: {
-        type: "vector",
-        url: "https://tiles.openfreemap.org/planet",
-        maxzoom: 12,
-      },
     },
     layers: [
       {
@@ -169,17 +179,18 @@ export function satelliteStyle(): StyleSpecification {
         // must read as "water" and not as a black void, because a near-black
         // background renders as black blocks at the outer edge of the viewport
         // whenever the wide-zoom tiles lag (the periphery fills in last).
-        // Using the exact sea-mask tone makes any water-side gap invisible,
+        // Matching the wide-view sea tone makes any water-side gap invisible,
         // and keeps land-side gaps a light "loading" patch instead of black.
-        paint: { "background-color": "#4e6966" },
+        paint: { "background-color": SEA_COLOR },
       },
       {
         // Coarse underlay for the zoom-out gap — see the `imagery-low` source.
         // Must sit directly above the background and below every other layer so
         // it only ever shows where the main imagery has no tile yet. The
         // brightness/contrast lift keeps its dark low-zoom pixels (Esri z9
-        // ocean averages luma ~60) well clear of "black block" territory even
-        // before the water mask paints over the sea.
+        // ocean averages luma ~60) well clear of "black block" territory. It
+        // only ever shows through a gap in `satellite-wide`, which normally
+        // covers it entirely.
         id: "satellite-low",
         type: "raster",
         source: "imagery-low",
@@ -191,73 +202,48 @@ export function satelliteStyle(): StyleSpecification {
         },
       },
       {
-        id: "satellite",
+        // Wide view. `imagery-wide` (tileSize 256) makes MapLibre fetch the
+        // tile level that actually matches the camera zoom, so at the overview
+        // the harbour is covered by a handful of uniform tiles and the sea
+        // reads as real water. Fades out as the camera closes in, handing over
+        // to the supersampled layer above.
+        id: "satellite-wide",
         type: "raster",
-        source: "imagery",
+        source: "imagery-wide",
+        // Above the handover the layer is invisible anyway; the maxzoom stops
+        // it fetching tiles nobody will see (at the default view both layers
+        // would otherwise pull a full screen of imagery each).
+        maxzoom: 14.5,
         paint: {
-          // 300ms fade-in so the progressive edge fill during a zoom reads as
-          // tiles streaming in rather than rectangles popping (the periphery
-          // is always the last to land).
           "raster-fade-duration": 300,
-          /**
-           * Two stacked measures against the dark, coarse z11–z12 mosaic Esri
-           * serves over Hong Kong (z11 alone is ~19% near-black pixels, with
-           * tile-aligned edges that read as big "shadows" over the sea):
-           *
-           *   1. The `imagery` source declares `tileSize: 128`. MapLibre picks
-           *      the tile zoom from the declared tile size, so this makes it
-           *      fetch one level deeper (z13+, genuine high-res aerial) and draw
-           *      each 256px image into half the area — 2x supersampling. This is
-           *      the real fix; the paint below only mops up the wide-out edges.
-           *   2. A leftover black-point / contrast lift for the z10–z11 edges
-           *      that still show at the wide end, faded to ZERO by z12.5 so it
-           *      can never wash out the sharp aerial. (Raising the black point on
-           *      good imagery is itself what makes it look soft and milky.)
-           *
-           * Both are zoom expressions on the camera zoom, so the wide view keeps
-           * the lift and every closer level shows the imagery at its natural
-           * tone. `raster-saturation` band-aid removed for the same reason.
-           */
+          "raster-opacity": ["interpolate", ["linear"], ["zoom"], 13.5, 1, 14.5, 0],
+          // Esri's wide-view mosaic is dark (z9–z10 ocean averages luma ~60),
+          // so a black-point lift is what keeps the overview's sea reading as
+          // water rather than as a shadow. Faded to zero by z12.5, where the
+          // imagery is bright enough on its own — raising the black point on
+          // good imagery is what makes it look soft and milky.
           "raster-brightness-min": ["interpolate", ["linear"], ["zoom"], 9.5, 0.2, 12.5, 0],
           "raster-brightness-max": 1,
           "raster-contrast": ["interpolate", ["linear"], ["zoom"], 9.5, -0.2, 12.5, 0],
         },
       },
       {
-        // Sea painted from OSM's high-res water polygons.
-        //
-        // The paint used to be a permanently opaque tone because Esri's low-zoom
-        // ocean mosaic over the harbour is dark and tone-shifted — adjacent tiles
-        // are different satellite passes, so the wide view shows near-black
-        // parallelograms over the water (measured: mean luma ~60 with ~15%
-        // near-black pixels at z10 vs ~94 and 0% at z14 — see
-        // out/verify/tiles/). That dark water is the "shadow" the mask hides.
-        //
-        // A permanently opaque mask throws the natural sea away though, so the
-        // fill now fades out with camera zoom: near-opaque at the overview
-        // (z10–z11, where the mosaic is at its worst), thin from z13 (Esri's
-        // harbour water is already clean by then) and gone by z14.5 — from there
-        // the bright, uniform high-res aerial shows through and the sea reads as
-        // real satellite water instead of a colour fill.
-        id: "sea-mask",
-        type: "fill",
-        source: "openmaptiles",
-        "source-layer": "water",
+        id: "satellite",
+        type: "raster",
+        source: "imagery",
+        // Mirrors `satellite-wide`'s maxzoom: below the handover this layer is
+        // transparent, so there is no reason to download its deeper tiles.
+        minzoom: 13.5,
         paint: {
-          "fill-color": SEA_COLOR,
-          "fill-opacity": [
-            "interpolate",
-            ["linear"],
-            ["zoom"],
-            10,
-            0.97,
-            11.5,
-            0.93,
-            13,
-            0.6,
-            14.5,
-            0,
-          ],
+          // 300ms fade-in so the progressive edge fill during a zoom reads as
+          // tiles streaming in rather than rectangles popping (the periphery
+          // is always the last to land).
+          "raster-fade-duration": 300,
+          // Handover from the wide layer. `imagery` declares tileSize 128, so
+          // from z13.5 up it fetches one level deeper than the camera and draws
+          // each 256px image into half the area — 2x supersampling, which is
+          // what keeps the aerial crisp at the zooms people actually read.
+          "raster-opacity": ["interpolate", ["linear"], ["zoom"], 13.5, 0, 14.5, 1],
         },
       },
       {
