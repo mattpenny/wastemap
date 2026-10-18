@@ -66,3 +66,35 @@ Scope: read-only investigation of the current code (no changes made), per reques
   attached screenshot predates it. **No code change required** unless dark patches are
   observed in the current build (in which case they would be mask gaps — unmapped
   harbour water — not a rendering/fog effect).
+
+## 7. Raw-tile measurements & the natural-sea fix (2026-10-18, shipped)
+
+Headless headroom: raw tiles over Victoria Harbour (114.16, 22.29):
+`scripts/_tile-probe.py`, tiles saved to `out/verify/tiles/`.
+
+| Source / zoom | Mean luma | Pixels < 40 luma | Water look |
+|---|---|---|---|
+| Esri z10 | 58.6–66.9 | 3.4–14.9% | dark, patchy, tone-shifted mosiac ("shadow") |
+| Esri z12 | 73.7–77.3 | 2.4–5.7% | milder tone steps |
+| Esri z13 | 79.9–80.7 | 0–6.0% | mostly clean teal |
+| Esri z14 | 89.5–94.0 | 0–0.1% | bright, uniform, natural |
+| EOX Sentinel-2 cloudless z12 | 85.3 | 3.9% | uniform but 10 m resolution (soft vs Esri) |
+
+The user wanted the natural sea back without the shadow. MapLibre cannot clip a
+raster to water polygons, so the shipped fix keeps the single OSM water-mask fill but
+**fades its opacity with camera zoom** (`src/components/map/mapStyles.ts`):
+
+```
+"fill-opacity": interpolate linear by zoom:
+  z10 → 0.97   (overview: dark mosaic fully suppressed, same approved tone)
+  z11.5 → 0.93
+  z13 → 0.6    (Esri harbour water already clean; texture through)
+  z14.5 → 0    (bright, uniform high-res aerial fully visible — natural sea)
+```
+
+Evidence: `out/verify/sea-fade-overview.png` (sea calm, no parallelograms) and
+`out/verify/sea-fade-close.png` (natural bright harbour water at close zoom).
+Verification: `tsc --noEmit` clean, browser suite 139/139, committed and pushed to
+`main` (`2a3a4d4`), auto-deployed to Vercel. An EOX Sentinel-2 cloudless basemap
+(seam-free everywhere but 10 m land) remains available as a future option if the
+user ever wants a second satellite style.
