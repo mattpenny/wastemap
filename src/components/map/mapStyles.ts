@@ -313,38 +313,47 @@ export function satelliteStyle(): StyleSpecification {
         // sweep and started below the first broken level, so the whole
         // z10.9-12.2 window stayed broken.
         //
-        // So the fill is fully opaque at the WIDE overview AND above z10.7, with
-        // a narrow natural window at the harbor close-up (z10.6). This is the
-        // fix for the "dark and murky" sea the user still saw after the
-        // z10.6->10.7 fix: the framed camera in WasteMap3D.tsx jumpTo's to a
-        // cameraForBounds that fits the whole territory by width, which in
-        // the user's viewport sits at a LOWER zoom than HK_ZOOM=10.6. At that
-        // wide zoom the mask was 0 so the raw Esri mosaic (dark water + ~20
-        // luma seams) showed through, reading as the murky sea in the
-        // screenshot. Zooming in 4 notches from the wide landing still lands
-        // below 10.6 and stays murky. The narrow natural window at z10.6
-        // preserves the "very good" harbor close-up (Esri's natural turquoise
-        // ~88 luma, the only zoom where raw water is actually bright); below
-        // 10.5 and above 10.7 the flat fill (~79 luma) takes over and hides
-        // the broken water at the overview AND the zoom-in darkening in one
-        // stroke. The transitions 10.5->10.6 and 10.6->10.7 are over 0.1 zoom
-        // each (~half a wheel notch) so the user passes through the blend
-        // quickly and never sits in it. The coastline hands over from Esri's
-        // to OSM's at both transitions — a known cost (the OSM polygon is
-        // generalised, so the overview shoreline is less natural than Esri's)
-        // that is now the trade for a sea that is not dark and murky.
+        // PART D (current): the user wants the map to render NATURALLY at the
+        // landing / overview — the "previous map" (Esri's real shoreline,
+        // turquoise shallows, sediment, ~88 luma) — and for the flat one-tone
+        // fill to appear ONLY once they have zoomed in four mouse-wheel notches.
+        // They explicitly do NOT want it always masked. So the fill is 0 (natural
+        // Esri) from the wide landing through three notches and ramps to 1 (the
+        // flat ~79-luma fill) at the fourth notch, where it stays.
         //
-        // Diagnostics: scripts/_seamzoom2.mjs (where it breaks),
-        // _sea-early.mjs (ramp previewer), _hybrid4.mjs (luma sweep),
-        // _livesea.mjs (deployed check), _wheel-repro.mjs (zoom-in repro),
-        // _sea-luma.mjs + _sea-scan.py (grid-scan the rendered sea).
+        // Where the fourth notch falls: the framed camera (above) jumpTo's to a
+        // cameraForBounds that fits the 19 facilities' east-west extent by width.
+        // In a 1440x900 window that lands at z10.36; the wheel moves ~0.18 zoom
+        // per notch (scripts/_wheel-repro.mjs), so four notches land at z11.08.
+        // The ramp below is pinned to that: natural below z10.9, flat above
+        // z11.08. A wider window lands lower and masks a notch later; a narrower
+        // one a notch earlier — within tolerance of "the fourth notch". The flat
+        // fill hides the two measured Esri defects listed above (the z12 tier
+        // step and the ~20-luma mosaic seams) and the open-sea darkening
+        // (88->30 luma from z10.6->z15, scripts/_hybrid4.mjs), all of which live
+        // above this zoom. The 0.18-zoom blend (~one notch) hands the coastline
+        // from Esri's to OSM's polygon — a known cost (OSM is generalised, so the
+        // overview shoreline is less natural than Esri's) that is now the trade
+        // for a sea that is not dark and murky.
+        //
+        // This is the inverse of the Part-C arrangement (which masked the wide
+        // overview too, reading as "always masked"): now the overview is natural
+        // again and only the zoom-in past the fourth notch is masked.
+        //
+        // Diagnostics: _sea-early.mjs (ramp previewer, RAMP="10.9:11.08"),
+        // _hybrid4.mjs (luma sweep), _livesea.mjs (deployed ramp check),
+        // _wheel-repro.mjs (zoom-in repro), _sea-luma.mjs + _sea-scan.py
+        // (grid-scan the rendered sea).
         id: "sea-mask",
         type: "fill",
         source: "openmaptiles",
         "source-layer": "water",
         paint: {
           "fill-color": SEA_COLOR,
-          "fill-opacity": ["interpolate", ["linear"], ["zoom"], 10.5, 1, 10.6, 0, 10.7, 1],
+          // Natural (0) from the wide landing through three wheel notches; the
+          // flat one-tone fill (1) engages at the fourth notch (~z11.08) and
+          // stays. See the note on the layer above for the derivation.
+          "fill-opacity": ["interpolate", ["linear"], ["zoom"], 10.9, 0, 11.08, 1],
         },
       },
       {

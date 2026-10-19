@@ -5,17 +5,18 @@
  * a screenshot: it reports the same luma number the local harness reports, so
  * the deployed build can be compared with the local one directly.
  *
- * The mask is zoom-gated: off at the landing zoom (z10.6, natural imagery,
- * which is what the wide view is supposed to look like) and fully on from
- * z10.9, the first level where Esri's mosaic breaks up into rectangles. So the
- * check is split — at and above z10.9 the sea must be exactly SEA_COLOR
- * (#35565c, luma ~79) with no dark pixels; at the landing it is real imagery
- * and only needs to stay clear of the dark band (> 55 luma, < 5% dark).
+ * The mask is zoom-gated: off (natural Esri imagery) from the landing zoom
+ * through three wheel notches, and fully on from z11.08 — the fourth mouse-
+ * wheel notch (the landing is ~z10.36 in a 1440x900 window; ~0.18 zoom per
+ * notch). So the check is split — at and above z11.08 the sea must be exactly
+ * SEA_COLOR (#35565c, luma ~79) with no dark pixels; below it the wide view is
+ * real imagery and only needs to stay clear of the dark band (> 55 luma, < 5%
+ * dark). The blend lives in 10.9->11.08 so z10.9 is still natural.
  */
 import { launchChromium } from "./_playwright.mjs";
 
 const BASE = process.env.BASE ?? "https://hkwastemap.vercel.app";
-const ZOOMS = [10.6, 10.9, 12.5, 15];
+const ZOOMS = [10.36, 10.9, 11.08, 12.5, 15];
 
 const browser = await launchChromium();
 const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
@@ -69,7 +70,7 @@ for (const z of ZOOMS) {
   seen.push(r.hex);
   // At and above the crossover the mask must be opaque; below it the imagery
   // is expected, so only the "not a shadow" floor applies.
-  const masked = z >= 10.9;
+  const masked = z >= 11.08;
   const ok = masked
     ? r.darkPct < 5 && r.luma > 70
       ? "OK (masked)"
@@ -79,7 +80,7 @@ for (const z of ZOOMS) {
       : "TOO DARK";
   console.log(`  ${String(z).padStart(5)}   ${r.hex}  ${String(r.luma).padStart(5)}   ${String(r.darkPct).padStart(5)}   ${ok}`);
 }
-// z10.6 sits under the place-label overlay, which tints the sample by 2-3 luma.
+// z10.36 sits under the place-label overlay, which tints the sample by 2-3 luma.
 console.log(`\n  colours across zooms: ${new Set(seen).size === 1 ? "YES (flat mask)" : "NO -> " + seen.join(" ")}`);
-console.log(`  (the landing zoom is expected to differ: z10.6 is natural imagery)`);
+console.log(`  (the landing zoom is expected to differ: z10.36 is natural imagery)`);
 await browser.close();
