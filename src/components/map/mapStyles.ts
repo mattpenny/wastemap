@@ -14,15 +14,17 @@ import type { StyleSpecification } from "maplibre-gl";
  * sea at the landing view and through three wheel notches, flat from the
  * fourth notch on, and similarly covered once any other zoom path (flyTo on
  * selection, geolocate, the +/− buttons, keyboard, double-click) goes deep.
- * Deep harbour teal: it separates water from land, which is what
- * gives the pitched view its depth.
+ * Deep turquoise-tortoise green (was deep harbour teal `#35565c`, which read
+ * too blue against the turquoise the sea still wears at the blend altitude):
+ * it separates water from land, which is what gives the pitched view its
+ * depth, and its green lean tracks the shallow-water tone into the blend.
  *
  * They are deliberately different. Matching them (as they were until this
  * revision) forced one value to do both jobs, and whichever it was, the other
  * zoom range looked wrong.
  */
 const SEA_BG = "#4d7871";
-const SEA_COLOR = "#35565c";
+const SEA_COLOR = "#447670";
 
 /**
  * Basemap definitions.
