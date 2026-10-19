@@ -26,8 +26,14 @@ import {
   HK_CENTER,
   HK_PITCH,
   HK_ZOOM,
+  SEA_MASK_DETENT_DEFAULT,
+  SEA_MASK_DETENT_MAX,
+  SEA_MASK_DETENT_MIN,
+  SEA_MASK_STATE,
   isSmallScreen,
   resolvePixelRatio,
+  seaMaskOpacity,
+  wheelDetentZoom,
   styleFor,
   styleKey,
   type MapStyleId,
@@ -163,6 +169,19 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
    * identity — without it, toggling language would not re-fetch the labels.
    */
   const appliedStyleRef = useRef<string>(styleKey(mapStyle, lang));
+
+  /**
+   * The sea mask's two anchors (see the init effect): the zoom the framing
+   * pass settled on (`landingRef`, known only after framing) and the zoom one
+   * wheel detent produces on this device (`detentRef`, refined from real
+   * wheel events as they arrive; seeded with the deltaY-120 default).
+   */
+  const landingRef = useRef<number | null>(null);
+  const detentRef = useRef(SEA_MASK_DETENT_DEFAULT);
+  /** Whether a real wheel detent has settled `detentRef` for this session. */
+  const detentMeasuredRef = useRef(false);
+  /** Latest `pushSeaMask` from the mount-once effect, callable elsewhere. */
+  const pushSeaMaskRef = useRef<(() => void) | null>(null);
 
   const [ready, setReady] = useState(false);
   /**
@@ -535,6 +554,82 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
     };
     map.on("zoom", handleZoom);
 
+    // ------------------------------------------------------------------
+    // The sea mask (see seaMaskOpacity in mapStyles.ts): flat one-tone sea
+    // from the FOURTH wheel notch of zoom-in, natural sea before that.
+    //
+    // The fill-opacity reads a single global state (`wmSeaMask`), and this is
+    // the code that computes and pushes it. The ramp is anchored on two
+    // measured quantities, so the mechanism needs no gesture bookkeeping:
+    //
+    //   • `landingRef` — the zoom the framing pass actually settled on for
+    //     this window (viewport-dependent),
+    //   • `detentRef`  — the zoom ONE wheel detent produces on THIS device,
+    //     measured off the detent's own deltaY with MapLibre's own conversion
+    //     and clamped to sane bounds (trackpads report continuous small
+    //     deltas that are not detents; they fall far below the clamp floor
+    //     and behave like sub-notch nudges, which is what they are).
+    //
+    // On every wheel detent and every zoom frame the offset of the live zoom
+    // above the landing is taken through the pure ramp: 0 up to 3 detents,
+    // 1 from the fourth detent on, blended between. Programmatic zooms
+    // (flyTo on selection, geolocate, +/− buttons, keyboard, double-click)
+    // produce no wheel detents, but their offset soon clears the ramp — the
+    // mask engages by zoom alone, exactly as the requirement asks ("I want
+    // the masked layer start from fourth notches of mouse wheeling" — and
+    // only wheel *notches* must NOT fire it earlier at any window size).
+    // ------------------------------------------------------------------
+    landingRef.current = null;
+    detentRef.current = SEA_MASK_DETENT_DEFAULT;
+    let lastPushed = -1;
+
+    const pushSeaMask = () => {
+      const landing = landingRef.current;
+      const layer = map.getLayer("sea-mask");
+      if (landing === null || !layer) return;
+      const opacity = seaMaskOpacity(map.getZoom(), landing, detentRef.current);
+      // _applyGlobalStateChanges re-evaluates the paint immediately; skip
+      // the property write when the value has not moved.
+      if (opacity === lastPushed) return;
+      lastPushed = opacity;
+      map.setGlobalStateProperty(SEA_MASK_STATE, opacity);
+    };
+    pushSeaMaskRef.current = pushSeaMask;
+
+    const handleWheel = (e: maplibregl.MapWheelEvent) => {
+      // ctrl+wheel is a browser/trackpad pinch, not a mouse detent.
+      if (e.originalEvent.ctrlKey) return;
+      const dz = wheelDetentZoom(e.originalEvent.deltaY, e.originalEvent.deltaMode);
+      if (dz < SEA_MASK_DETENT_MIN || dz > SEA_MASK_DETENT_MAX) return; // not a detent
+      // A wheel reports its detents at a consistent delta on a given device,
+      // so the first detent settles `detentRef` for the session and later
+      // detents keep it — the ramp width is then exactly this device's
+      // 3-to-4-detent span, wherever it began.
+      if (!detentMeasuredRef.current) {
+        detentMeasuredRef.current = true;
+        detentRef.current = dz;
+      }
+      pushSeaMask();
+    };
+    map.on("wheel", handleWheel);
+
+    // During an eased zoom (wheel included) the offset sweeps continuously;
+    // the zoom event fires every frame, so the blend tracks the coast live.
+    map.on("zoom", pushSeaMask);
+
+    // A style swap reinstalls the stylesheet (state defaults included), so
+    // the computed opacity must be re-pushed onto the new style — guarded,
+    // because only the satellite style carries the sea-mask layer. Verified
+    // in maplibre-gl 5.24: `_load()` runs `_createLayers()` (which applies
+    // the stylesheet `state`) and *then* fires `style.load`, so the layers
+    // exist by the time this runs.
+    map.on("style.load", () => {
+      lastPushed = -1;
+      pushSeaMask();
+    });
+
+    // ------------------------------------------------------------------
+
     // User-initiated map move (pan / zoom / rotate / pitch) — used on mobile to
     // collapse the floating sheets. `originalEvent` is populated only for moves
     // driven by real input (drag, wheel, touch), so a programmatic flyTo (e.g.
@@ -569,6 +664,8 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
     return () => {
       window.clearTimeout(readyFallback);
       map.off("zoom", handleZoom);
+      map.off("wheel", handleWheel);
+      map.off("zoom", pushSeaMask);
       map.off("movestart", handleInteractStart);
       map.off("zoomstart", handleInteractStart);
       map.off("rotatestart", handleInteractStart);
@@ -696,6 +793,12 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
     map.setZoom(zoom);
 
     framedCameraRef.current = { center: byWidth.center as [number, number], zoom };
+
+    // Anchor the sea-mask ramp on the camera the opening view actually
+    // settled on, then take the mask through the ramp from wherever the
+    // landing sits relative to the (possibly already-deep) live zoom.
+    landingRef.current = zoom;
+    if (map.getLayer("sea-mask")) pushSeaMaskRef.current?.();
   }, [ready, facilities]);
 
   // ------------------------------------------------------------------
@@ -737,6 +840,10 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
         // the tighten pass settled on, not a fixed zoom that no longer matches
         // it. Falls back to the territory centre if the fit never ran.
         const framed = framedCameraRef.current;
+        // Reset the mask anchors with the view: the landing zoom is what the
+        // ramp is measured against.
+        landingRef.current = framed?.zoom ?? null;
+        pushSeaMaskRef.current?.();
         mapRef.current?.flyTo({
           center: framed?.center ?? HK_CENTER,
           zoom: framed?.zoom ?? (isSmallScreen() ? 9.6 : HK_ZOOM),

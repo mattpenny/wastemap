@@ -8,8 +8,13 @@ import type { StyleSpecification } from "maplibre-gl";
  * edge, so it is matched to the *overview* water (sampled #4d7871) rather than
  * to the mask: a gap at the wide view then reads as more sea, not as a block.
  *
- * `SEA_COLOR` is the `sea-mask` fill, which is only visible from z10.9 up —
- * see the layer. Deep harbour teal: it separates water from land, which is what
+ * `SEA_COLOR` is the `sea-mask` fill — the flat one-tone sea that covers
+ * Esri's measured water defects once the user has zoomed in. Its opacity is
+ * driven as the `wmSeaMask` global state (see `seaMaskOpacity` below): natural
+ * sea at the landing view and through three wheel notches, flat from the
+ * fourth notch on, and similarly covered once any other zoom path (flyTo on
+ * selection, geolocate, the +/− buttons, keyboard, double-click) goes deep.
+ * Deep harbour teal: it separates water from land, which is what
  * gives the pitched view its depth.
  *
  * They are deliberately different. Matching them (as they were until this
@@ -54,6 +59,99 @@ export const HK_CENTER: [number, number] = [114.1694, 22.3193];
 export const HK_ZOOM = 10.6;
 export const HK_PITCH = 50;
 export const HK_BEARING = -18;
+
+/**
+ * How the flat sea mask engages (2026-10-21, "start at the fourth notch").
+ *
+ * The user's requirement is a **gesture** requirement — "the masked layer
+ * starts from the fourth notch of mouse wheeling" — but the landing zoom
+ * differs with window size (the framing fit solves for width: z10.36 at
+ * 1440x900, z10.56 at 1920x1080, z9.65 at a short 1080x540, z10.18 at
+ * 1280x800), so no constant zoom ramp can fire at the same notch on every
+ * screen. A zoom ramp anchored at 10.9/11.08 measured the mask starting at
+ * notch 3, 2, 7 and 5 on those four viewports — the "fourth to seventh
+ * notches" the user reported. Worse, the zoom a wheel *detent* produces is
+ * device-dependent: MapLibre converts one detent through
+ * `scale = 2/(1+exp(-|delta|/450))`, so a detent reporting deltaY=120 moves
+ * +0.180 zoom while a Chrome/Windows mouse reporting deltaY=100 moves only
+ * +0.152. An odometer of *wheel events* is what makes "the fourth notch" true
+ * on the user's own mouse.
+ *
+ * So `fill-opacity` is a single global-state number (`wmSeaMask`, default 0 —
+ * natural sea), and the *component* computes it from two ingredients:
+ *
+ *   1. the landing zoom the framing pass actually settled on (viewport-
+ *      dependent),
+ *   2. the zoom ONE wheel detent actually produces on the user's device —
+ *      with MapLibre's own conversion (see `wheelDetentZoom`).
+ *
+ * The mask ramp then begins fading at that landing + 3 detents and reaches 1
+ * exactly at the landing + 4 detents: "starts from the fourth notch", in the
+ * units the user counts, on every window size and every mouse, with no
+ * gesture bookkeeping (a zoom predicate is stateless and cannot desync from
+ * the camera). It cannot falsely trigger early: below the landing + 3
+ * detents the ramp is 0 by construction, so the first three notches are
+ * always natural sea.
+ */
+export const SEA_MASK_STATE = "wmSeaMask";
+
+/**
+ * Zoom one wheel detent produces, before it is measured. MapLibre converts a
+ * deltaY-120 detent via `scale = 2/(1+exp(-delta/450))` → x1.1327 → +0.180
+ * zoom; this default matches MapLibre's own wheel math and the observed
+ * 1440x900 probes.
+ */
+export const SEA_MASK_DETENT_DEFAULT = 0.18;
+
+/** Sane bounds for one detent's zoom across real wheel reporting modes. */
+export const SEA_MASK_DETENT_MIN = 0.07; // deltaY 53 (Windows line mode)
+export const SEA_MASK_DETENT_MAX = 0.35;
+
+/**
+ * Absolute backstop: four detents of even the LARGEST tolerated reporting
+ * mode. Guarantees the flat fill no matter what, and covers deep non-wheel
+ * zooms (flyTo on selection, geolocate, keyboard, double-click) whose offset
+ * dwarfs any ramp.
+ */
+export const SEA_MASK_GUARANTEE_OFFSET = 4 * SEA_MASK_DETENT_MAX;
+
+/**
+ * The zoom one mouse-wheel detent produces on this device, using MapLibre's
+ * own ScrollZoomHandler math (maplibre-gl 5.24, scroll_zoom):
+ *
+ *   value  = deltaY, scaled by 40 per line when deltaMode is DOM_DELTA_LINE
+ *   rate   = 1/450 (the wheel rate — every detent-sized delta takes it)
+ *   dZoom  = log2(2 / (1 + exp(-|value| / 450)))
+ *
+ * A deltaY-120 detent therefore moves +0.180 zoom; deltaY-100 (Chrome on
+ * Windows) +0.152; deltaY-159 +0.245. Reading the detent's own delta is what
+ * makes "notch" a per-device truth instead of an assumption.
+ */
+export function wheelDetentZoom(value: number, deltaMode: number): number {
+  const v = Math.abs(deltaMode === 1 /* DOM_DELTA_LINE */ ? value * 40 : value);
+  if (v === 0) return 0;
+  const scale = 2 / (1 + Math.exp(-v / 450));
+  return Math.log2(scale);
+}
+
+/**
+ * The whole mask as a pure function of the live zoom, the landing camera and
+ * the measured per-detent zoom. Pure, so the probe can call the same math.
+ *
+ *   • offset ≤ 3 detents  → 0 (natural Esri sea),
+ *   • offset = 4 detents  → 1 (flat one-tone sea),
+ *   • in between          → the one-notch blend that hands the coastline
+ *                           from Esri's polygon to OSM's.
+ */
+export function seaMaskOpacity(zoom: number, landing: number, detent: number): number {
+  const offset = zoom - landing;
+  if (offset >= SEA_MASK_GUARANTEE_OFFSET) return 1;
+  const onset = 3 * detent;
+  const full = 4 * detent;
+  if (offset <= onset) return 0;
+  if (offset >= full) return 1;
+  return clamp01((offset - onset) / (full - onset));
+}
 
 const LANDSD_ATTRIBUTION =
   '© <a href="https://www.landsd.gov.hk/" target="_blank" rel="noreferrer">Lands Department, HKSAR Government</a>';
@@ -116,6 +214,11 @@ export function officialStyle(lang: MapLang = "en"): StyleSpecification {
 export function satelliteStyle(): StyleSpecification {
   return {
     version: 8,
+    // Declared default for the sea-mask opacity: 0 = natural Esri sea. Only
+    // the satellite style has the sea-mask layer; `_createLayers` re-installs
+    // this default on every style (re)load, which is why the component
+    // re-asserts the computed value on `style.load`.
+    state: { [SEA_MASK_STATE]: { default: 0 } },
     sources: {
       // Two declarations of the same Esri service, differing only in the
       // declared tile size. MapLibre picks the tile zoom from that number, so
@@ -283,14 +386,14 @@ export function satelliteStyle(): StyleSpecification {
         },
       },
       {
-        // Sea painted from OSM's water polygons — from the first zoom above the
-        // landing view. This is the fourth arrangement of this layer, so the
-        // history is worth keeping.
+        // Sea painted from OSM's water polygons, driven as a global state.
+        // This is the fifth arrangement of this layer, so the history is
+        // worth keeping.
         //
         // The natural sea is the look that was asked for, and at the landing
-        // zoom (z10.6) Esri delivers it: turquoise shallows, sediment plumes,
-        // a real shoreline. The problem is everything above it. Two measured
-        // defects in Esri's water:
+        // zoom Esri delivers it: turquoise shallows, sediment plumes, a real
+        // shoreline. The problem is everything above it. Two measured defects
+        // in Esri's water:
         //
         //   1. a cache tier step at z12 — the same point of deep water goes
         //      #1e4549 (luma 61) at z8-z11 and #092936 (luma 35) at z12-z17
@@ -303,57 +406,50 @@ export function satelliteStyle(): StyleSpecification {
         // (scripts/_hybrid4.mjs). So an unmasked close-up was never viable —
         // the shadow the user kept reporting.
         //
-        // The tile-size split (see the sources above) holds the wide view
-        // together: tileSize 256 makes MapLibre fetch the level that matches
-        // the camera, so the overview is covered by a handful of uniform
-        // tiles. It stops holding as soon as the view is tight enough to span
-        // many tiles of one mosaic pass — sweep the same water to z10.9 with
-        // the old ramp (scripts/_seamzoom2.mjs) and the harbour is rectangles.
-        // The previous ramp (0 at z11.2, 1 by z12.2) was set from the luma
-        // sweep and started below the first broken level, so the whole
-        // z10.9-12.2 window stayed broken.
-        //
-        // PART D (current): the user wants the map to render NATURALLY at the
+        // PART E (current): the user wants the map to render NATURALLY at the
         // landing / overview — the "previous map" (Esri's real shoreline,
         // turquoise shallows, sediment, ~88 luma) — and for the flat one-tone
-        // fill to appear ONLY once they have zoomed in four mouse-wheel notches.
-        // They explicitly do NOT want it always masked. So the fill is 0 (natural
-        // Esri) from the wide landing through three notches and ramps to 1 (the
-        // flat ~79-luma fill) at the fourth notch, where it stays.
+        // fill to appear ONLY once they have zoomed in four mouse-wheel
+        // notches. They explicitly do NOT want it always masked.
         //
-        // Where the fourth notch falls: the framed camera (above) jumpTo's to a
-        // cameraForBounds that fits the 19 facilities' east-west extent by width.
-        // In a 1440x900 window that lands at z10.36; the wheel moves ~0.18 zoom
-        // per notch (scripts/_wheel-repro.mjs), so four notches land at z11.08.
-        // The ramp below is pinned to that: natural below z10.9, flat above
-        // z11.08. A wider window lands lower and masks a notch later; a narrower
-        // one a notch earlier — within tolerance of "the fourth notch". The flat
-        // fill hides the two measured Esri defects listed above (the z12 tier
-        // step and the ~20-luma mosaic seams) and the open-sea darkening
-        // (88->30 luma from z10.6->z15, scripts/_hybrid4.mjs), all of which live
-        // above this zoom. The 0.18-zoom blend (~one notch) hands the coastline
-        // from Esri's to OSM's polygon — a known cost (OSM is generalised, so the
-        // overview shoreline is less natural than Esri's) that is now the trade
-        // for a sea that is not dark and murky.
+        // Arrangement D tried to express "fourth notch" as a fixed zoom ramp
+        // pinned to the 1440x900 landing (0 below z10.9, 1 above z11.08,
+        // "~0.18 zoom per notch"), conceding that wider/narrower windows
+        // "mask a notch later/earlier — within tolerance". It is not within
+        // tolerance: live probes (scripts/_notch-probe.mjs) measured the mask
+        // first appearing at notch 3, 2, 7 and 5 on those four viewports —
+        // the "fourth to seventh notches" the user reported. The 0.18 zoom a
+        // detent moves is also device-dependent (a Chrome/Windows wheel
+        // reporting deltaY=100 moves ~0.152), so even a viewport-perfect
+        // ramp is off by half a notch on other mice.
         //
-        // This is the inverse of the Part-C arrangement (which masked the wide
-        // overview too, reading as "always masked"): now the overview is natural
-        // again and only the zoom-in past the fourth notch is masked.
+        // So the requirement is honoured literally: the fill-opacity is a
+        // global state (`wmSeaMask`, default 0 — natural sea everywhere until
+        // engaged), computed by seaMaskOpacity() (see the note there) from
+        //   • the component's wheel odometer — "fourth wheel notch" as the
+        //     user counts it, counted in Notches of zoom-in (from the framed
+        //     landing camera), blended across one notch to soften the
+        //     coastline hand-over to OSM's more generalised polygons; and
+        //   • a zoom safety net anchored on the *actual* landing zoom the
+        //     framing pass measured, so a flyTo on selection, the geolocate
+        //     fit, the +/− buttons, keyboard or double-click zoom — none of
+        //     which are wheel notches — still cover the sea once deep enough.
         //
-        // Diagnostics: _sea-early.mjs (ramp previewer, RAMP="10.9:11.08"),
-        // _hybrid4.mjs (luma sweep), _livesea.mjs (deployed ramp check),
-        // _wheel-repro.mjs (zoom-in repro), _sea-luma.mjs + _sea-scan.py
-        // (grid-scan the rendered sea).
+        // Diagnostics: _notch-probe.mjs (per-notch notches/zoom/opacity sweep
+        // across viewports), _sea-early.mjs (ramp previewer), _hybrid4.mjs
+        // (luma sweep), _wheel-repro.mjs (zoom-in repro), _sea-luma.mjs
+        // + _sea-scan.py (grid-scan the rendered sea).
         id: "sea-mask",
         type: "fill",
         source: "openmaptiles",
         "source-layer": "water",
         paint: {
           "fill-color": SEA_COLOR,
-          // Natural (0) from the wide landing through three wheel notches; the
-          // flat one-tone fill (1) engages at the fourth notch (~z11.08) and
-          // stays. See the note on the layer above for the derivation.
-          "fill-opacity": ["interpolate", ["linear"], ["zoom"], 10.9, 0, 11.08, 1],
+          // 0/natural at the landing and through three notches; flat from the
+          // fourth notch on. The number is computed in WasteMap3D.tsx and
+          // pushed as a global state (verified: setGlobalStateProperty
+          // re-evaluates this paint immediately, with no camera movement).
+          "fill-opacity": ["global-state", SEA_MASK_STATE],
         },
       },
       {
@@ -408,4 +504,8 @@ export function resolvePixelRatio(): number {
 export function isSmallScreen(): boolean {
   if (typeof window === "undefined") return false;
   return window.matchMedia("(max-width: 760px)").matches;
+}
+
+function clamp01(v: number): number {
+  return Math.min(1, Math.max(0, v));
 }
