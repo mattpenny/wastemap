@@ -50,7 +50,7 @@ const pieBtn = section.locator('[data-testid="wb-chart-pie"]');
 check("switch: bar button present", (await barBtn.count()) === 1);
 check("switch: pie button present", (await pieBtn.count()) === 1);
 check("switch: pie is the default", (await pieBtn.getAttribute("aria-pressed")) === "true");
-check("switch: pie starts unpressed", (await pieBtn.getAttribute("aria-pressed")) === "false");
+check("switch: bar starts unpressed", (await barBtn.getAttribute("aria-pressed")) === "false");
 
 // Right-aligned: the group's right edge should sit in the right third of the
 // section, and clearly to the right of the heading text.
@@ -78,6 +78,9 @@ check(
 );
 
 // --- bar mode ----------------------------------------------------------
+// Pie is the default, so the bar list has to be switched on first.
+await barBtn.click();
+await page.waitForTimeout(1500);
 check("bar mode: wb-streams present", (await section.locator('[data-testid="wb-streams"]').count()) === 1);
 check("bar mode: no pie", (await section.locator('[data-testid="wb-streams-pie"]').count()) === 0);
 const barText = await section.locator('[data-testid="wb-streams"]').innerText();
