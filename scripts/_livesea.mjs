@@ -1,20 +1,21 @@
 /**
- * One-off: measure the DEPLOYED site's sea tone at three zooms.
+ * One-off: measure the DEPLOYED site's sea tone at four zooms.
  *
  * This is the "is my fix actually live?" check that does not rely on eyeballing
  * a screenshot: it reports the same luma number the local harness reports, so
  * the deployed build can be compared with the local one directly.
  *
- * The mask is now zoom-gated: off below z11.2 (natural imagery, which is what
- * the wide view is supposed to look like) and fully on from z12.2. So the check
- * is split — above z12.2 the sea must be exactly SEA_COLOR (#35565c, luma ~79)
- * with no dark pixels; at the overview it is real imagery and only needs to
- * stay clear of the dark band (> 55 luma, < 5% dark).
+ * The mask is zoom-gated: off at the landing zoom (z10.6, natural imagery,
+ * which is what the wide view is supposed to look like) and fully on from
+ * z10.9, the first level where Esri's mosaic breaks up into rectangles. So the
+ * check is split — at and above z10.9 the sea must be exactly SEA_COLOR
+ * (#35565c, luma ~79) with no dark pixels; at the landing it is real imagery
+ * and only needs to stay clear of the dark band (> 55 luma, < 5% dark).
  */
 import { launchChromium } from "./_playwright.mjs";
 
 const BASE = process.env.BASE ?? "https://hkwastemap.vercel.app";
-const ZOOMS = [10.6, 12.5, 15];
+const ZOOMS = [10.6, 10.9, 12.5, 15];
 
 const browser = await launchChromium();
 const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
@@ -60,9 +61,9 @@ for (const z of ZOOMS) {
   await page.waitForTimeout(4500);
   const r = await luma(await page.screenshot());
   seen.push(r.hex);
-  // Above the crossover the mask must be opaque; below it the imagery is
-  // expected, so only the "not a shadow" floor applies.
-  const masked = z >= 12.2;
+  // At and above the crossover the mask must be opaque; below it the imagery
+  // is expected, so only the "not a shadow" floor applies.
+  const masked = z >= 10.9;
   const ok = masked
     ? r.darkPct < 5 && r.luma > 70
       ? "OK (masked)"
@@ -74,4 +75,5 @@ for (const z of ZOOMS) {
 }
 // z10.6 sits under the place-label overlay, which tints the sample by 2-3 luma.
 console.log(`\n  colours across zooms: ${new Set(seen).size === 1 ? "YES (flat mask)" : "NO -> " + seen.join(" ")}`);
+console.log(`  (the landing zoom is expected to differ: z10.6 is natural imagery)`);
 await browser.close();

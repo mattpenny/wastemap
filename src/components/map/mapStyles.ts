@@ -8,7 +8,7 @@ import type { StyleSpecification } from "maplibre-gl";
  * edge, so it is matched to the *overview* water (sampled #4d7871) rather than
  * to the mask: a gap at the wide view then reads as more sea, not as a block.
  *
- * `SEA_COLOR` is the `sea-mask` fill, which is only visible from z12.2 up —
+ * `SEA_COLOR` is the `sea-mask` fill, which is only visible from z10.9 up —
  * see the layer. Deep harbour teal: it separates water from land, which is what
  * gives the pitched view its depth.
  *
@@ -130,12 +130,14 @@ export function satelliteStyle(): StyleSpecification {
       //                 supersampling, which is what keeps land crisp once you
       //                 are close enough to care.
       //
-      // Only one is visible at a time; they cross-fade between z11.5 and z12.5
+      // Only one is visible at a time; they cross-fade between z13.5 and z14.5
       // (see the two raster layers). Using 128 at the wide end was the original
       // bug: it pulled z11/z12 tiles whose adjacent mosaic passes differ in
       // tone, which showed up as large parallelograms over the water. That was
       // hidden with an opaque sea fill, which also threw away the sea's detail —
-      // the two-source split fixes the cause instead.
+      // the two-source split fixes the cause instead, but only while the view
+      // is wide enough to stay inside few tiles; from z10.9 the mosaic shows
+      // again, which is what the sea-mask below now covers.
       imagery: {
         type: "raster",
         tiles: [
@@ -281,39 +283,44 @@ export function satelliteStyle(): StyleSpecification {
         },
       },
       {
-        // Sea painted from OSM's water polygons — but ONLY from z12.2 up.
+        // Sea painted from OSM's water polygons — from the first zoom above the
+        // landing view. This is the fourth arrangement of this layer, so the
+        // history is worth keeping.
         //
-        // This is the third and final arrangement of this layer, so the history
-        // is worth keeping. Esri's water has two defects, both measured:
+        // The natural sea is the look that was asked for, and at the landing
+        // zoom (z10.6) Esri delivers it: turquoise shallows, sediment plumes,
+        // a real shoreline. The problem is everything above it. Two measured
+        // defects in Esri's water:
         //
-        //   1. Esri switches cache tiers at z12. The same point of deep water
-        //      goes #1e4549 (luma 61) at z8-z11 and #092936 (luma 35) at
-        //      z12-z17, so the sea visibly darkens at one zoom. Land does not
-        //      step, so the drop is deep-water only.
-        //   2. Adjacent Esri tiles differ by ~20 luma over water, which shows
-        //      as pale rectangles with hard edges (scripts/_seamprobe.mjs).
+        //   1. a cache tier step at z12 — the same point of deep water goes
+        //      #1e4549 (luma 61) at z8-z11 and #092936 (luma 35) at z12-z17
+        //      (scripts/_tilesample.mjs), while land does not step;
+        //   2. adjacent tiles differ by ~20 luma over water, showing as pale
+        //      rectangles with hard edges (scripts/_seamprobe.mjs).
         //
-        // A full mask at every zoom hides both, but it also throws away the
-        // wide view's water — the turquoise shallows and sediment plumes are
-        // the most attractive thing on the map at the overview, and the OSM
-        // coastline is a generalised polygon, so the shore loses its bays and
-        // piers. That is what was rejected twice.
+        // On top of that the water itself darkens with zoom: the open sea
+        // slides 88 -> 84 -> 77 -> 63 -> 54 -> 44 -> 30 luma from z10.6 to z15
+        // (scripts/_hybrid4.mjs). So an unmasked close-up was never viable —
+        // the shadow the user kept reporting.
         //
-        // Leaving it off everywhere is not an option either: measured, the open
-        // sea slides 88 -> 84 -> 77 -> 63 -> 54 -> 44 -> 30 luma from z10.6 to
-        // z15 (scripts/_hybrid4.mjs) — the shadow the user kept reporting.
+        // The tile-size split (see the sources above) holds the wide view
+        // together: tileSize 256 makes MapLibre fetch the level that matches
+        // the camera, so the overview is covered by a handful of uniform
+        // tiles. It stops holding as soon as the view is tight enough to span
+        // many tiles of one mosaic pass — sweep the same water to z10.9 with
+        // the old ramp (scripts/_seamzoom2.mjs) and the harbour is rectangles.
+        // The previous ramp (0 at z11.2, 1 by z12.2) was set from the luma
+        // sweep and started below the first broken level, so the whole
+        // z10.9-12.2 window stayed broken.
         //
-        // So the mask fades in across the window where the imagery goes bad.
-        // The two effects cancel: the natural water darkens as the flat fill
-        // arrives, and the rendered sea holds 88 -> 84 -> 79 -> 78 -> 80 luma
-        // across the whole range, with no visible dip at the crossover. Below
-        // z11.2 the imagery is untouched, which is the look that was asked for.
+        // So the fill now starts at the landing zoom and is fully opaque by
+        // z10.9, the first level where the imagery breaks. The tone works out:
+        // the landing water measures ~88 luma and the fill is ~89, so the
+        // rendered sea holds ~88 -> 89 as the rectangles disappear and the
+        // coastline hands over from Esri's to OSM's — a blend, not a snap.
         //
-        // The coastline therefore hands over from Esri's to OSM's between z11.2
-        // and z12.2. The fade is what makes that a blend rather than a snap.
-        //
-        // Diagnostics: scripts/_tilesample.mjs (the z12 step),
-        // _seamprobe.mjs (the seam), _hybrid4.mjs (this ramp, measured),
+        // Diagnostics: scripts/_seamzoom2.mjs (where it breaks),
+        // _sea-early.mjs (this ramp, previewed), _hybrid4.mjs (luma sweep),
         // _livesea.mjs (deployed check).
         id: "sea-mask",
         type: "fill",
@@ -321,7 +328,7 @@ export function satelliteStyle(): StyleSpecification {
         "source-layer": "water",
         paint: {
           "fill-color": SEA_COLOR,
-          "fill-opacity": ["interpolate", ["linear"], ["zoom"], 11.2, 0, 12.2, 1],
+          "fill-opacity": ["interpolate", ["linear"], ["zoom"], 10.6, 0, 10.9, 1],
         },
       },
       {
