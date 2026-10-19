@@ -2,11 +2,16 @@ import type { StyleSpecification } from "maplibre-gl";
 
 /**
  * Fill for the WebGL background — the colour painted wherever no satellite
- * tile has arrived yet. Sampled from Esri's wide-view sea over Hong Kong, so a
- * gap over water is invisible and a gap over land is a light "loading" patch
- * rather than a black block.
+ * tile has arrived yet. It is also the sea: the `sea-mask` layer paints the
+ * same value over OSM water, so a tile gap over water is invisible.
+ *
+ * Deep harbour teal, not the old #4e6966 (2026-10-19, appearance pass). The
+ * old value was luma 99 — exactly the median of the whole frame — so the sea
+ * and the land sat at the same tone and the view read flat and dull no matter
+ * how the imagery was graded. Going deeper (luma ~78) separates water from
+ * land, which is what makes the terrain and the extruded pillars read as 3D.
  */
-const SEA_COLOR = "#4e6966";
+const SEA_COLOR = "#35565c";
 
 /**
  * Basemap definitions.
@@ -205,7 +210,10 @@ export function satelliteStyle(): StyleSpecification {
           "raster-fade-duration": 0,
           "raster-brightness-min": 0.28,
           "raster-brightness-max": 1,
-          "raster-contrast": -0.08,
+          // Matches the grade on the two layers above, so a gap never flashes
+          // a differently-coloured patch while the sharp tiles are in flight.
+          "raster-contrast": 0,
+          "raster-saturation": 0.25,
         },
       },
       {
@@ -229,9 +237,17 @@ export function satelliteStyle(): StyleSpecification {
           // water rather than as a shadow. Faded to zero by z12.5, where the
           // imagery is bright enough on its own — raising the black point on
           // good imagery is what makes it look soft and milky.
-          "raster-brightness-min": ["interpolate", ["linear"], ["zoom"], 9.5, 0.2, 12.5, 0],
+          "raster-brightness-min": ["interpolate", ["linear"], ["zoom"], 9.5, 0.26, 12.5, 0],
           "raster-brightness-max": 1,
-          "raster-contrast": ["interpolate", ["linear"], ["zoom"], 9.5, -0.2, 12.5, 0],
+          // A light grade, not a rescue. The raw mosaic is desaturated grey-
+          // green (measured saturation 22% of the frame), which is the other
+          // half of why the view looked dull; +0.25 saturation and a touch of
+          // contrast bring the vegetation and the built-up areas back without
+          // the milky haze a bigger black-point lift causes. Tuned against
+          // out/look/ — E-bright-punch held the median at 96 (baseline 99)
+          // while lifting p90 129 → 142 and saturation 22% → 30%.
+          "raster-contrast": 0.08,
+          "raster-saturation": 0.25,
         },
       },
       {
@@ -251,6 +267,11 @@ export function satelliteStyle(): StyleSpecification {
           // each 256px image into half the area — 2x supersampling, which is
           // what keeps the aerial crisp at the zooms people actually read.
           "raster-opacity": ["interpolate", ["linear"], ["zoom"], 13.5, 0, 14.5, 1],
+          // Same grade as the wide layer, so the handover is invisible. The
+          // close imagery is clean enough not to need the black-point lift,
+          // only the colour.
+          "raster-contrast": 0.08,
+          "raster-saturation": 0.25,
         },
       },
       {
@@ -287,10 +308,14 @@ export function satelliteStyle(): StyleSpecification {
         paint: { "fill-color": SEA_COLOR, "fill-opacity": 1 },
       },
       {
+        // Esri's place names are white text on dark plates. At 0.88 they
+        // dominated the frame and were a large part of why the view read as
+        // heavy; 0.72 keeps them legible over both land and water without
+        // letting them compete with the facilities.
         id: "places",
         type: "raster",
         source: "labels",
-        paint: { "raster-fade-duration": 0, "raster-opacity": 0.88 },
+        paint: { "raster-fade-duration": 0, "raster-opacity": 0.72 },
       },
     ],
   };
