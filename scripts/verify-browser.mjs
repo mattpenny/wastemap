@@ -308,6 +308,19 @@ if (await oitf.count()) {
       });
     }, `[data-testid="${id}"]`);
 
+  // The streams block now opens on the pie. Most of the assertions below read
+  // the bar list's text and the amber GTW note, which only exists in bar mode,
+  // so switch first — but assert the default before clicking it away.
+  const barBtn = section.locator('[data-testid="wb-chart-bar"]');
+  const pieBtn = section.locator('[data-testid="wb-chart-pie"]');
+  check("weighbridge: switch opens on the pie",
+    (await pieBtn.getAttribute("aria-pressed")) === "true" &&
+      (await barBtn.getAttribute("aria-pressed")) === "false" &&
+      (await section.locator('[data-testid="wb-streams-pie"]').count()) === 1 &&
+      (await section.locator('[data-testid="wb-streams"]').count()) === 0);
+  await barBtn.click();
+  await page.waitForTimeout(1200);
+
   const wbText = await section.innerText();
   // The intake is split MSW / GTW, so the two tiles sum to the period total
   // (42,507 + 7,526 = 50,033) rather than showing it as one figure, and each
@@ -458,6 +471,9 @@ if (await oitf.count()) {
   // build passed Array.map's index as the share, so the bars read 0%, 100%,
   // 200%… and every one past the first was clipped to full width — which looked
   // plausible on screen. Assert the geometry, not just the text.
+  //
+  // The streams block was switched to bars up front (before `wbText` was read),
+  // so the bar geometry here runs against real bars.
   const wbStreams = await readList("wb-streams");
   const wbWaste = await readList("wb-waste-types");
   const wbDistricts = await readList("wb-districts");
@@ -489,17 +505,17 @@ if (await oitf.count()) {
     JSON.stringify(wbWaste?.map((b) => b.width)));
 
   // --- the bar / pie switch on the streams block ---
-  // Bars are the default, so everything above still ran against them. The pie
-  // is a proportion view over MSW only: GTW is its own stream, and leaving it
-  // in would make the vehicle shares read as shares of a total that contains a
-  // different kind of waste. So the two shares must be re-based (52.2 / 32.8
-  // of all intake become 61 / 39 of MSW) and the centre must show 42,507.
+  // The pie is the default view (see the check above, which also switched the
+  // block to bars for the geometry assertions). It is a proportion view over
+  // MSW only: GTW is its own stream, and leaving it in would make the vehicle
+  // shares read as shares of a total that contains a different kind of waste.
+  // So the two shares must be re-based (52.2 / 32.8 of all intake become
+  // 61 / 39 of MSW) and the centre must show 42,507.
   {
-    const barBtn = section.locator('[data-testid="wb-chart-bar"]');
-    const pieBtn = section.locator('[data-testid="wb-chart-pie"]');
     check("weighbridge: bar/pie switch present",
       (await barBtn.count()) === 1 && (await pieBtn.count()) === 1);
-    check("weighbridge: switch opens on bars",
+    // Bars were selected up front for the geometry assertions.
+    check("weighbridge: switch still shows bars",
       (await barBtn.getAttribute("aria-pressed")) === "true" &&
         (await pieBtn.getAttribute("aria-pressed")) === "false");
 
@@ -831,6 +847,12 @@ if (await oitf.count()) {
       hasGtw: /grease trap waste/i.test(text),
       modeToggle: Boolean(sec?.querySelector('[data-testid="wb-mode"]')),
       charts: drawer?.querySelectorAll(".recharts-wrapper").length ?? 0,
+      // The streams block opens on the pie, so the bottom sheet holds two
+      // Recharts views: the intake line chart and the delivery-stream donut.
+      pieDefault: Boolean(
+        sec?.querySelector('[data-testid="wb-chart-pie"]')
+          ?.getAttribute("aria-pressed") === "true"
+      ),
       barsInRange: bars.length > 0 && bars.every((w) => w > 0 && w <= 100),
       scrollW: document.documentElement.scrollWidth,
       vw: innerWidth,
@@ -838,7 +860,8 @@ if (await oitf.count()) {
   });
   check("mobile: WKTS drawer shows the weighbridge block", mobileWb.shown, JSON.stringify(mobileWb));
   check("mobile: weighbridge figures render in the bottom sheet",
-    mobileWb.hasMsw && mobileWb.hasGtw && mobileWb.charts === 1, JSON.stringify(mobileWb));
+    mobileWb.hasMsw && mobileWb.hasGtw && mobileWb.pieDefault && mobileWb.charts === 2,
+    JSON.stringify(mobileWb));
   check("mobile: weighbridge mode switch renders in the bottom sheet", mobileWb.modeToggle);
   check("mobile: weighbridge bars stay proportional", mobileWb.barsInRange);
   check("mobile: weighbridge drawer causes no horizontal overflow",

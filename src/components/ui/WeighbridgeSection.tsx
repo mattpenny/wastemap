@@ -427,9 +427,10 @@ export default function WeighbridgeSection({
   const [range, setRange] = React.useState({ from: available.from, to: available.to });
   const [mode, setMode] = React.useState<Mode>("total");
   const [bucket, setBucket] = React.useState<PeriodBucket>("day");
-  // Bar is the default: it carries the tonnage and load count per stream, which
-  // is the detail people come to this block for. The pie is the proportion view.
-  const [streamChart, setStreamChart] = React.useState<StreamChart>("bar");
+  // Pie is the default: the question the heading asks ("Who delivers it?") is a
+  // proportion question, and the donut answers it at a glance. The bars are one
+  // click away and carry the tonnage and load count per stream.
+  const [streamChart, setStreamChart] = React.useState<StreamChart>("pie");
 
   const years = React.useMemo(() => stationYears(records), [records]);
   const summary = React.useMemo(
