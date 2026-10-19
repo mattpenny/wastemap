@@ -49,6 +49,12 @@ async function luma(buf) {
 }
 
 console.log(`\n${BASE}  (open water south of Lamma)\n`);
+// Read the ramp back off the deployed build, so a stale deploy is obvious
+// rather than being mistaken for a broken fix.
+const ramp = await page.evaluate(() =>
+  JSON.stringify(window.__wmMap.getPaintProperty("sea-mask", "fill-opacity"))
+);
+console.log(`  sea-mask fill-opacity: ${ramp}`);
 console.log("  camZ    hex       luma   dark%   verdict");
 console.log("  " + "-".repeat(50));
 const seen = [];
