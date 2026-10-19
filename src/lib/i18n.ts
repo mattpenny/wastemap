@@ -177,6 +177,17 @@ const DICT = {
   wbCaptionQuarter: ["Tonnes per quarter, by delivery stream.", "每季接收量，按來源類別劃分。"],
   wbCaptionYear: ["Tonnes per year, by delivery stream.", "每年接收量，按來源類別劃分。"],
   weighbridgeStreams: ["Who delivers it", "來源類別"],
+  // Bar/pie switch on the streams block. Icons carry the meaning; these strings
+  // are the accessible name and the hover tooltip.
+  wbChartBar: ["Show as bars", "以柱狀顯示"],
+  wbChartPie: ["Show as a pie", "以圓餅顯示"],
+  // The pie is drawn over MSW only — grease trap waste is its own stream and
+  // would otherwise be a second, unrelated quantity in the same proportions.
+  wbPieMsw: ["MSW", "都市固體廢物"],
+  wbPieExcludesGtw: [
+    "Shares of MSW only — grease trap waste excluded.",
+    "只計算都市固體廢物，不包括隔油池廢物。",
+  ],
   weighbridgeWasteTypes: ["Waste type", "廢物類別"],
   weighbridgeDistricts: ["Source district", "來源地區"],
   weighbridgeGtwNote: [

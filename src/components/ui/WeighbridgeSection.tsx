@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { ChevronDown, ChevronUp, Info, Scale } from "lucide-react";
+import { ChartColumn, ChartPie, ChevronDown, ChevronUp, Info, Scale } from "lucide-react";
 import type { ChartRow } from "./WasteChart";
 import dynamic from "next/dynamic";
 
@@ -11,6 +11,13 @@ import dynamic from "next/dynamic";
 const WasteChart = dynamic(() => import("./WasteChart"), {
   ssr: false,
   loading: () => <div className="h-[150px]" aria-hidden />,
+});
+
+// Same reasoning for the donut: Recharts is only pulled in once the user
+// actually asks for a chart, and the bar list is the default view.
+const StreamPie = dynamic(() => import("./StreamPie"), {
+  ssr: false,
+  loading: () => <div className="h-[152px]" aria-hidden />,
 });
 
 import {
@@ -265,11 +272,67 @@ function RankedList<T extends { tonnes: number }>({
 }
 
 /** Section heading with an uppercase label and a rule. */
-function SectionHeading({ label }: { label: string }) {
+/** Which shape the delivery-stream block is drawn in. */
+type StreamChart = "bar" | "pie";
+
+/**
+ * Section label with an optional right-aligned control.
+ *
+ * The control sits in the same row as the heading rather than under it, so the
+ * card gains a switch without gaining a line of vertical space.
+ */
+function SectionHeading({ label, action }: { label: string; action?: React.ReactNode }) {
   return (
-    <p className="mb-2 text-[length:calc(10px*var(--fs))] font-semibold uppercase tracking-wider text-white/40">
-      {label}
-    </p>
+    <div className="mb-2 flex items-center justify-between gap-2">
+      <p className="text-[length:calc(10px*var(--fs))] font-semibold uppercase tracking-wider text-white/40">
+        {label}
+      </p>
+      {action}
+    </div>
+  );
+}
+
+/** Bar / pie switch for the delivery-stream block. */
+function ChartToggle({
+  value,
+  onChange,
+  lang,
+}: {
+  value: StreamChart;
+  onChange: (v: StreamChart) => void;
+  lang: Lang;
+}) {
+  const options = [
+    { id: "bar" as const, Icon: ChartColumn, labelKey: "wbChartBar" as const },
+    { id: "pie" as const, Icon: ChartPie, labelKey: "wbChartPie" as const },
+  ];
+  return (
+    <div
+      role="group"
+      className="flex shrink-0 items-center gap-0.5 rounded-full border border-white/10 bg-white/[0.05] p-0.5"
+    >
+      {options.map(({ id, Icon, labelKey }) => {
+        const active = value === id;
+        const label = t(labelKey, lang);
+        return (
+          <button
+            key={id}
+            type="button"
+            data-testid={`wb-chart-${id}`}
+            aria-pressed={active}
+            aria-label={label}
+            title={label}
+            onClick={() => onChange(id)}
+            className={cn(
+              "rounded-full p-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60",
+              active ? "bg-emerald-500 text-slate-950" : "text-white/45 hover:text-white/85"
+            )}
+          >
+            <Icon className="h-3.5 w-3.5" />
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -364,6 +427,9 @@ export default function WeighbridgeSection({
   const [range, setRange] = React.useState({ from: available.from, to: available.to });
   const [mode, setMode] = React.useState<Mode>("total");
   const [bucket, setBucket] = React.useState<PeriodBucket>("day");
+  // Bar is the default: it carries the tonnage and load count per stream, which
+  // is the detail people come to this block for. The pie is the proportion view.
+  const [streamChart, setStreamChart] = React.useState<StreamChart>("bar");
 
   const years = React.useMemo(() => stationYears(records), [records]);
   const summary = React.useMemo(
@@ -392,6 +458,31 @@ export default function WeighbridgeSection({
       gtw: b.gtw,
     }));
   }, [summary.daily, bucket, lang]);
+
+  /**
+   * Slices for the donut — MSW only.
+   *
+   * Grease trap waste is dropped here on purpose: it is a separate stream that
+   * WKTS alone accepts, and leaving it in would make the two vehicle shares
+   * read as shares of a total that includes a different kind of waste. The
+   * shares are therefore re-based on the MSW sum, not the card's grand total.
+   */
+  const pieSlices = React.useMemo(() => {
+    const rows = summary.streams.filter((s) => s.key !== "gtw");
+    const msw = rows.reduce((a, s) => a + s.tonnes, 0) || 1;
+    return rows.map((s) => ({
+      key: s.key,
+      label: pick(lang, s.labelEn, s.labelZh),
+      value: scale(s.tonnes),
+      share: s.tonnes / msw,
+      color: STREAM_COLOR[s.key] ?? "#94a3b8",
+    }));
+  }, [summary.streams, lang, scale]);
+
+  const pieTotal = React.useMemo(
+    () => pieSlices.reduce((a, s) => a + s.value, 0),
+    [pieSlices]
+  );
 
   const year = range.from.slice(0, 4);
 
@@ -592,24 +683,39 @@ export default function WeighbridgeSection({
 
       {/* Who delivers it */}
       <div>
-        <SectionHeading label={t("weighbridgeStreams", lang)} />
-        <div data-testid="wb-streams" className="space-y-2.5">
-          {summary.streams.map((s) => (
-            <RankedBar
-              key={s.key}
-              label={pick(lang, s.labelEn, s.labelZh)}
-              value={scale(s.tonnes)}
-              unit={tonneUnit}
-              loads={scale(s.loads)}
-              loadsUnit={loadUnit}
-              share={s.share}
-              barShare={s.share}
-              color={STREAM_COLOR[s.key] ?? "#94a3b8"}
-              highlight={s.key === "gtw"}
-            />
-          ))}
-        </div>
-        {gtwWaste && summary.gtwTonnes > 0 && (
+        <SectionHeading
+          label={t("weighbridgeStreams", lang)}
+          action={<ChartToggle value={streamChart} onChange={setStreamChart} lang={lang} />}
+        />
+        {streamChart === "pie" ? (
+          <StreamPie
+            slices={pieSlices}
+            unit={tonneUnit}
+            total={pieTotal}
+            totalLabel={t("wbPieMsw", lang)}
+            note={t("wbPieExcludesGtw", lang)}
+          />
+        ) : (
+          <div data-testid="wb-streams" className="space-y-2.5">
+            {summary.streams.map((s) => (
+              <RankedBar
+                key={s.key}
+                label={pick(lang, s.labelEn, s.labelZh)}
+                value={scale(s.tonnes)}
+                unit={tonneUnit}
+                loads={scale(s.loads)}
+                loadsUnit={loadUnit}
+                share={s.share}
+                barShare={s.share}
+                color={STREAM_COLOR[s.key] ?? "#94a3b8"}
+                highlight={s.key === "gtw"}
+              />
+            ))}
+          </div>
+        )}
+        {/* The amber note explains why GTW is a stream at all. In pie mode the
+            block already says GTW is excluded, so showing both would be noise. */}
+        {streamChart === "bar" && gtwWaste && summary.gtwTonnes > 0 && (
           <div className="mt-2.5 flex items-start gap-2 rounded-lg border border-amber-400/20 bg-amber-400/[0.07] px-2.5 py-2">
             <Info className="mt-0.5 h-3 w-3 shrink-0 text-amber-300/80" />
             <p className="text-[length:calc(10px*var(--fs))] leading-relaxed text-amber-100/80">

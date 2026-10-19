@@ -10,7 +10,9 @@
 # next.js
 /.next/
 /.next-dev*/
-/.next.stale/
+# Renamed-aside build caches (the safe-delete shim blocks deleting them), so
+# they are suffixed: .next.stale-1, .next.stale-2, ...
+/.next.stale*/
 /out/
 
 # production

@@ -488,6 +488,69 @@ if (await oitf.count()) {
       wbWaste.every((b, i) => i === 0 || b.width <= wbWaste[i - 1].width),
     JSON.stringify(wbWaste?.map((b) => b.width)));
 
+  // --- the bar / pie switch on the streams block ---
+  // Bars are the default, so everything above still ran against them. The pie
+  // is a proportion view over MSW only: GTW is its own stream, and leaving it
+  // in would make the vehicle shares read as shares of a total that contains a
+  // different kind of waste. So the two shares must be re-based (52.2 / 32.8
+  // of all intake become 61 / 39 of MSW) and the centre must show 42,507.
+  {
+    const barBtn = section.locator('[data-testid="wb-chart-bar"]');
+    const pieBtn = section.locator('[data-testid="wb-chart-pie"]');
+    check("weighbridge: bar/pie switch present",
+      (await barBtn.count()) === 1 && (await pieBtn.count()) === 1);
+    check("weighbridge: switch opens on bars",
+      (await barBtn.getAttribute("aria-pressed")) === "true" &&
+        (await pieBtn.getAttribute("aria-pressed")) === "false");
+
+    // Right-aligned in the heading row, not floating under it.
+    const align = await page.evaluate(() => {
+      const sec = document.querySelector('[data-testid="weighbridge-section"]');
+      const group = document.querySelector('[data-testid="wb-chart-bar"]')?.parentElement;
+      const heading = [...sec.querySelectorAll("p")].find((p) =>
+        /who delivers it/i.test(p.textContent ?? ""));
+      const r = (el) => el.getBoundingClientRect();
+      return {
+        groupRight: r(group).x + r(group).width,
+        sectionRight: r(sec).x + r(sec).width,
+        groupX: r(group).x,
+        headingRight: r(heading).x + r(heading).width,
+      };
+    });
+    check("weighbridge: switch is right-aligned beside the heading",
+      align.groupRight <= align.sectionRight &&
+        align.groupRight > align.sectionRight - 80 &&
+        align.groupX > align.headingRight,
+      JSON.stringify(align));
+
+    await pieBtn.click();
+    await page.waitForTimeout(1200);
+    check("weighbridge: pie replaces the bar list",
+      (await section.locator('[data-testid="wb-streams-pie"]').count()) === 1 &&
+        (await section.locator('[data-testid="wb-streams"]').count()) === 0);
+
+    const legend = await section.locator('[data-testid="wb-streams-pie-legend"]').innerText();
+    check("weighbridge: pie has exactly two streams",
+      (await section.locator('[data-testid="wb-streams-pie-legend"] > span').count()) === 2);
+    check("weighbridge: pie excludes GTW", !/grease trap/i.test(legend), legend.replace(/\n/g, " | "));
+    check("weighbridge: pie shares are re-based on MSW (61 / 39)",
+      /61%/.test(legend) && /39%/.test(legend), legend.replace(/\n/g, " | "));
+
+    const pieText = await section.locator('[data-testid="wb-streams-pie"]').innerText();
+    check("weighbridge: pie centre is the MSW total",
+      /42,507/.test(pieText) && !/50,033/.test(pieText), pieText.replace(/\n/g, " | "));
+    check("weighbridge: pie has two slices",
+      (await section.locator('[data-testid="wb-streams-pie"] .recharts-pie-sector').count()) === 2);
+    check("weighbridge: pie does not disturb the intake line chart",
+      (await section.locator(".recharts-line").count()) === 3);
+
+    await barBtn.click();
+    await page.waitForTimeout(1000);
+    check("weighbridge: switch returns to the bar list",
+      (await section.locator('[data-testid="wb-streams"]').count()) === 1 &&
+        (await section.locator('[data-testid="wb-streams-pie"]').count()) === 0);
+  }
+
   // Shares are of MSW now that the GTW row is gone, so the top type reads 45.3%
   // (19,272 of 42,507) rather than 38.5% of all intake.
   check("weighbridge: top waste type is 45.3% of MSW",
