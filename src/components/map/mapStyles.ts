@@ -313,31 +313,38 @@ export function satelliteStyle(): StyleSpecification {
         // sweep and started below the first broken level, so the whole
         // z10.9-12.2 window stayed broken.
         //
-        // So the fill now starts at the landing zoom (z10.6, fully natural) and
-        // is fully opaque by z10.7 — ONE mouse-wheel notch above the landing.
-        // That is the fix for the "shadow" the user saw after zooming in from
-        // the default view: the previous ramp (0 at z10.6, 1 by z10.9) was only
-        // ~33% opaque at z10.7, so the darkening raw Esri deep water showed
-        // through a half-transparent mask and read as a murky shadow
-        // (scripts/_wheel-repro.mjs: 4 notches land at z11.08; the shadow
-        // appears after just 1-2, ~z10.7-10.8). Now the flat fill (luma ~79)
-        // replaces the raw water the instant you zoom in, so there is no
-        // in-between window where dark water leaks through. The landing view is
-        // untouched: at z10.6 the mask is 0 and Esri's natural turquoise shows.
-        // The coastline hands over from Esri's to OSM's across the short
-        // 10.6 -> 10.7 window — a small step (Esri ~84 luma to fill ~79), not a
-        // visible snap.
+        // So the fill is fully opaque at the WIDE overview AND above z10.7, with
+        // a narrow natural window at the harbor close-up (z10.6). This is the
+        // fix for the "dark and murky" sea the user still saw after the
+        // z10.6->10.7 fix: the framed camera in WasteMap3D.tsx jumpTo's to a
+        // cameraForBounds that fits the whole territory by width, which in
+        // the user's viewport sits at a LOWER zoom than HK_ZOOM=10.6. At that
+        // wide zoom the mask was 0 so the raw Esri mosaic (dark water + ~20
+        // luma seams) showed through, reading as the murky sea in the
+        // screenshot. Zooming in 4 notches from the wide landing still lands
+        // below 10.6 and stays murky. The narrow natural window at z10.6
+        // preserves the "very good" harbor close-up (Esri's natural turquoise
+        // ~88 luma, the only zoom where raw water is actually bright); below
+        // 10.5 and above 10.7 the flat fill (~79 luma) takes over and hides
+        // the broken water at the overview AND the zoom-in darkening in one
+        // stroke. The transitions 10.5->10.6 and 10.6->10.7 are over 0.1 zoom
+        // each (~half a wheel notch) so the user passes through the blend
+        // quickly and never sits in it. The coastline hands over from Esri's
+        // to OSM's at both transitions — a known cost (the OSM polygon is
+        // generalised, so the overview shoreline is less natural than Esri's)
+        // that is now the trade for a sea that is not dark and murky.
         //
         // Diagnostics: scripts/_seamzoom2.mjs (where it breaks),
-        // _sea-early.mjs (this ramp, previewed), _hybrid4.mjs (luma sweep),
-        // _livesea.mjs (deployed check), _wheel-repro.mjs (the reported zoom-in).
+        // _sea-early.mjs (ramp previewer), _hybrid4.mjs (luma sweep),
+        // _livesea.mjs (deployed check), _wheel-repro.mjs (zoom-in repro),
+        // _sea-luma.mjs + _sea-scan.py (grid-scan the rendered sea).
         id: "sea-mask",
         type: "fill",
         source: "openmaptiles",
         "source-layer": "water",
         paint: {
           "fill-color": SEA_COLOR,
-          "fill-opacity": ["interpolate", ["linear"], ["zoom"], 10.6, 0, 10.7, 1],
+          "fill-opacity": ["interpolate", ["linear"], ["zoom"], 10.5, 1, 10.6, 0, 10.7, 1],
         },
       },
       {

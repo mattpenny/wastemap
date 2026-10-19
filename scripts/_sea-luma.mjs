@@ -23,7 +23,7 @@ const SEA = [
   ["S-basin", 114.00, 22.10],
 ];
 
-const ZOOMS = [10.36, 10.54, 10.72, 10.90, 11.08];
+const ZOOMS = [9.8, 10.0, 10.2, 10.36, 10.5, 10.6, 10.72, 10.9, 11.08];
 
 const browser = await launchChromium();
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
