@@ -313,22 +313,31 @@ export function satelliteStyle(): StyleSpecification {
         // sweep and started below the first broken level, so the whole
         // z10.9-12.2 window stayed broken.
         //
-        // So the fill now starts at the landing zoom and is fully opaque by
-        // z10.9, the first level where the imagery breaks. The tone works out:
-        // the landing water measures ~88 luma and the fill is ~89, so the
-        // rendered sea holds ~88 -> 89 as the rectangles disappear and the
-        // coastline hands over from Esri's to OSM's — a blend, not a snap.
+        // So the fill now starts at the landing zoom (z10.6, fully natural) and
+        // is fully opaque by z10.7 — ONE mouse-wheel notch above the landing.
+        // That is the fix for the "shadow" the user saw after zooming in from
+        // the default view: the previous ramp (0 at z10.6, 1 by z10.9) was only
+        // ~33% opaque at z10.7, so the darkening raw Esri deep water showed
+        // through a half-transparent mask and read as a murky shadow
+        // (scripts/_wheel-repro.mjs: 4 notches land at z11.08; the shadow
+        // appears after just 1-2, ~z10.7-10.8). Now the flat fill (luma ~79)
+        // replaces the raw water the instant you zoom in, so there is no
+        // in-between window where dark water leaks through. The landing view is
+        // untouched: at z10.6 the mask is 0 and Esri's natural turquoise shows.
+        // The coastline hands over from Esri's to OSM's across the short
+        // 10.6 -> 10.7 window — a small step (Esri ~84 luma to fill ~79), not a
+        // visible snap.
         //
         // Diagnostics: scripts/_seamzoom2.mjs (where it breaks),
         // _sea-early.mjs (this ramp, previewed), _hybrid4.mjs (luma sweep),
-        // _livesea.mjs (deployed check).
+        // _livesea.mjs (deployed check), _wheel-repro.mjs (the reported zoom-in).
         id: "sea-mask",
         type: "fill",
         source: "openmaptiles",
         "source-layer": "water",
         paint: {
           "fill-color": SEA_COLOR,
-          "fill-opacity": ["interpolate", ["linear"], ["zoom"], 10.6, 0, 10.9, 1],
+          "fill-opacity": ["interpolate", ["linear"], ["zoom"], 10.6, 0, 10.7, 1],
         },
       },
       {
