@@ -5,9 +5,11 @@
  * a screenshot: it reports the same luma number the local harness reports, so
  * the deployed build can be compared with the local one directly.
  *
- * With the flat `sea-mask` restored, the sea must read a near-constant
- * #4e6966 (luma ~99) with 0% dark pixels at EVERY zoom. Any drift between
- * zooms means imagery is showing through again.
+ * The mask is now zoom-gated: off below z11.2 (natural imagery, which is what
+ * the wide view is supposed to look like) and fully on from z12.2. So the check
+ * is split — above z12.2 the sea must be exactly SEA_COLOR (#35565c, luma ~79)
+ * with no dark pixels; at the overview it is real imagery and only needs to
+ * stay clear of the dark band (> 55 luma, < 5% dark).
  */
 import { launchChromium } from "./_playwright.mjs";
 
@@ -58,11 +60,16 @@ for (const z of ZOOMS) {
   await page.waitForTimeout(4500);
   const r = await luma(await page.screenshot());
   seen.push(r.hex);
-  // SEA_COLOR is #35565c (luma ~79). The threshold is deliberately below that:
-  // this is a "is the mask opaque" check, not a "is the sea the right colour"
-  // check — a brighter-than-expected value would mean imagery bleeding through,
-  // a darker one just means SEA_COLOR was changed on purpose.
-  const ok = r.darkPct < 5 && r.luma > 70 ? "OK" : "IMAGERY SHOWING THROUGH";
+  // Above the crossover the mask must be opaque; below it the imagery is
+  // expected, so only the "not a shadow" floor applies.
+  const masked = z >= 12.2;
+  const ok = masked
+    ? r.darkPct < 5 && r.luma > 70
+      ? "OK (masked)"
+      : "IMAGERY SHOWING THROUGH"
+    : r.darkPct < 5 && r.luma > 55
+      ? "OK (natural imagery)"
+      : "TOO DARK";
   console.log(`  ${String(z).padStart(5)}   ${r.hex}  ${String(r.luma).padStart(5)}   ${String(r.darkPct).padStart(5)}   ${ok}`);
 }
 // z10.6 sits under the place-label overlay, which tints the sample by 2-3 luma.

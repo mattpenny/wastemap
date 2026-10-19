@@ -1,16 +1,22 @@
 import type { StyleSpecification } from "maplibre-gl";
 
 /**
- * Fill for the WebGL background — the colour painted wherever no satellite
- * tile has arrived yet. It is also the sea: the `sea-mask` layer paints the
- * same value over OSM water, so a tile gap over water is invisible.
+ * Two sea tones, because they do two different jobs (2026-10-19).
  *
- * Deep harbour teal, not the old #4e6966 (2026-10-19, appearance pass). The
- * old value was luma 99 — exactly the median of the whole frame — so the sea
- * and the land sat at the same tone and the view read flat and dull no matter
- * how the imagery was graded. Going deeper (luma ~78) separates water from
- * land, which is what makes the terrain and the extruded pillars read as 3D.
+ * `SEA_BG` is the WebGL background — what is painted wherever no satellite tile
+ * has arrived. It only ever shows during a `flyTo` or around a lagging tile
+ * edge, so it is matched to the *overview* water (sampled #4d7871) rather than
+ * to the mask: a gap at the wide view then reads as more sea, not as a block.
+ *
+ * `SEA_COLOR` is the `sea-mask` fill, which is only visible from z12.2 up —
+ * see the layer. Deep harbour teal: it separates water from land, which is what
+ * gives the pitched view its depth.
+ *
+ * They are deliberately different. Matching them (as they were until this
+ * revision) forced one value to do both jobs, and whichever it was, the other
+ * zoom range looked wrong.
  */
+const SEA_BG = "#4d7871";
 const SEA_COLOR = "#35565c";
 
 /**
@@ -193,7 +199,7 @@ export function satelliteStyle(): StyleSpecification {
         // whenever the wide-zoom tiles lag (the periphery fills in last).
         // Matching the wide-view sea tone makes any water-side gap invisible,
         // and keeps land-side gaps a light "loading" patch instead of black.
-        paint: { "background-color": SEA_COLOR },
+        paint: { "background-color": SEA_BG },
       },
       {
         // Coarse underlay for the zoom-out gap — see the `imagery-low` source.
@@ -275,11 +281,10 @@ export function satelliteStyle(): StyleSpecification {
         },
       },
       {
-        // Flat sea painted from OSM's water polygons, hiding Esri's water
-        // mosaic defects. Above the raster, below the place labels.
+        // Sea painted from OSM's water polygons — but ONLY from z12.2 up.
         //
-        // Restored deliberately (user's decision, 2026-10-19). The measured
-        // reason it is needed — kept here so this is not "fixed" again:
+        // This is the third and final arrangement of this layer, so the history
+        // is worth keeping. Esri's water has two defects, both measured:
         //
         //   1. Esri switches cache tiers at z12. The same point of deep water
         //      goes #1e4549 (luma 61) at z8-z11 and #092936 (luma 35) at
@@ -288,24 +293,36 @@ export function satelliteStyle(): StyleSpecification {
         //   2. Adjacent Esri tiles differ by ~20 luma over water, which shows
         //      as pale rectangles with hard edges (scripts/_seamprobe.mjs).
         //
-        // Both are in the source pixels. A partial tint leaves the seams and
-        // the tier step still readable; a tone curve cannot lift luma 35 to
-        // ~90 without turning every land shadow to grey haze. Only a flat fill
-        // removes them completely — hence opacity 1.
+        // A full mask at every zoom hides both, but it also throws away the
+        // wide view's water — the turquoise shallows and sediment plumes are
+        // the most attractive thing on the map at the overview, and the OSM
+        // coastline is a generalised polygon, so the shore loses its bays and
+        // piers. That is what was rejected twice.
         //
-        // What this costs, so nobody is surprised later: the sea loses its
-        // detail (turquoise shallows, sediment plumes, wakes) and reads as one
-        // tone at every zoom. That is the accepted trade for a clean sea.
+        // Leaving it off everywhere is not an option either: measured, the open
+        // sea slides 88 -> 84 -> 77 -> 63 -> 54 -> 44 -> 30 luma from z10.6 to
+        // z15 (scripts/_hybrid4.mjs) — the shadow the user kept reporting.
         //
-        // Diagnostic history, if the sea ever needs revisiting:
-        //   scripts/_tilesample.mjs  raw Esri tone by zoom (proves the z12 step)
-        //   scripts/_seamprobe.mjs   isolates the pale-rectangle seam
-        //   scripts/_seasweep.mjs    rendered sea luma, layer on vs off
+        // So the mask fades in across the window where the imagery goes bad.
+        // The two effects cancel: the natural water darkens as the flat fill
+        // arrives, and the rendered sea holds 88 -> 84 -> 79 -> 78 -> 80 luma
+        // across the whole range, with no visible dip at the crossover. Below
+        // z11.2 the imagery is untouched, which is the look that was asked for.
+        //
+        // The coastline therefore hands over from Esri's to OSM's between z11.2
+        // and z12.2. The fade is what makes that a blend rather than a snap.
+        //
+        // Diagnostics: scripts/_tilesample.mjs (the z12 step),
+        // _seamprobe.mjs (the seam), _hybrid4.mjs (this ramp, measured),
+        // _livesea.mjs (deployed check).
         id: "sea-mask",
         type: "fill",
         source: "openmaptiles",
         "source-layer": "water",
-        paint: { "fill-color": SEA_COLOR, "fill-opacity": 1 },
+        paint: {
+          "fill-color": SEA_COLOR,
+          "fill-opacity": ["interpolate", ["linear"], ["zoom"], 11.2, 0, 12.2, 1],
+        },
       },
       {
         // Esri's place names are white text on dark plates. At 0.88 they
