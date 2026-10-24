@@ -39,8 +39,16 @@ const VESSELS = [
 /** Hong Kong waters. AISStream takes [[south, west], [north, east]]. */
 const BBOX = [[[22.10, 113.85], [22.40, 114.35]]];
 
-/** Ignore a position report if it is within this many metres of the last. */
-const MIN_MOVE_M = 15;
+/**
+ * Ignore a position report if it is within this many metres of the last.
+ *
+ * 5 m is deliberately tight. AISStream relays roughly one report per vessel
+ * per minute, so a short run only ever sees a handful of points; at 15 m a
+ * slow or moored vessel produced a track so short it could only be drawn as a
+ * straight segment. 5 m keeps genuine manoeuvring — a berth shift, a slow
+ * swing — while still rejecting GPS jitter while moored (typically 1–3 m).
+ */
+const MIN_MOVE_M = 5;
 /** Ignore reports older than this (a stale replay is not a real sighting). */
 const MAX_AGE_MS = 10 * 60 * 1000;
 

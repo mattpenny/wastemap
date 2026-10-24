@@ -321,11 +321,13 @@ export default function HomePage() {
   /** OITF and any other grouped facilities start collapsed. */
   const [expandedGroups, setExpandedGroups] = useState<string[]>([]);
   /**
-   * Animate the recorded AIS vessel tracks. Off by default — the routes are a
-   * supporting layer, not the point of the map, and they only exist once a
-   * vessel has actually sailed while the collector was running.
+   * Replay the recorded AIS routes. Off by default: the map leads with where
+   * the vessels ARE now (their last recorded position, always drawn whenever a
+   * track exists), and the route is the extra you ask for. With no recorded
+   * track the state stays false, which keeps the toggle disabled rather than
+   * offering to draw nothing.
    */
-  const [showVessels, setShowVessels] = useState(false);
+  const [showVesselRoutes, setShowVesselRoutes] = useState(false);
   /**
    * Measured intake, keyed by station code, from `/api/station-data`. Only the
    * stations that report weighbridge data appear here; the rest simply have no
@@ -491,17 +493,20 @@ export default function HomePage() {
   const handleClose = useCallback(() => setSelected(null), []);
 
   /**
-   * Vessel routes on / off. Switching on also flies the camera to the
+   * Last sailing routes on / off. Switching on also flies the camera to the
    * recorded tracks: they are a few kilometres long, so at the territory
    * overview they would otherwise be a handful of pixels the user has to go
-   * looking for. Switching off leaves the camera where it is.
+   * looking for. Switching off leaves the camera where it is — and leaves the
+   * vessel markers where they are, since those are drawn regardless.
+   *
+   * The fly is deliberately NOT inside the setState updater — an updater must
+   * stay pure, or React's double-invocation in development fires it twice.
    */
   const toggleVessels = useCallback(() => {
-    setShowVessels((v) => {
-      if (!v) mapHandle.current?.focusVessels();
-      return !v;
-    });
-  }, []);
+    const next = !showVesselRoutes;
+    setShowVesselRoutes(next);
+    if (next) mapHandle.current?.focusVessels();
+  }, [showVesselRoutes]);
 
   /**
    * Bottom-dock tabs (phones only).
@@ -692,7 +697,7 @@ export default function HomePage() {
           mapStyle={mapStyle}
           lang={lang}
           visibleCategories={visibleCategories}
-          showVessels={showVessels}
+          showVesselRoutes={showVesselRoutes}
           emptyHint={!loading && visibleFacilities.length === 0}
           onUserMapInteract={handleUserMapInteract}
         />
@@ -1090,14 +1095,17 @@ export default function HomePage() {
 
               {legendOpen && (
                 <div className="space-y-1 border-t border-white/10 px-2 py-2">
-                  {/* Vessel routes. Deliberately NOT a category checkbox: it is a
-                      different kind of layer, so it sits above the facility
-                      categories rather than beside them. Disabled until a
-                      vessel has actually sailed while the collector ran — there
-                      is nothing honest to draw from a stationary ship. */}
+                  {/* Last sailing route. Deliberately NOT a category checkbox:
+                      it is a different kind of layer, so it sits above the
+                      facility categories rather than beside them. The vessel
+                      markers themselves are always drawn whenever a track
+                      exists — this switch only adds the route, its wake and
+                      the playback on top. Disabled until a vessel has actually
+                      sailed while the collector ran: there is nothing honest
+                      to draw from a stationary ship. */}
                   <button
                     onClick={toggleVessels}
-                    aria-pressed={showVessels}
+                    aria-pressed={showVesselRoutes}
                     disabled={VESSEL_TRACKS.length === 0}
                     title={
                       VESSEL_TRACKS.length === 0
@@ -1108,7 +1116,7 @@ export default function HomePage() {
                       "flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60",
                       VESSEL_TRACKS.length === 0
                         ? "cursor-not-allowed opacity-40"
-                        : showVessels
+                        : showVesselRoutes
                           ? "hover:bg-white/8"
                           : "opacity-50 hover:opacity-80"
                     )}
@@ -1118,7 +1126,7 @@ export default function HomePage() {
                       style={{ backgroundColor: "#38bdf8" }}
                     />
                     <span className="flex-1 truncate text-[length:calc(11.5px*var(--fs))] font-medium text-white/85">
-                      {lang === "zh" ? "廢物運輸船航線" : "Vessel routes (AIS)"}
+                      {lang === "zh" ? "上次航行航線 (AIS)" : "Last sailing route (AIS)"}
                     </span>
                     <span className="text-[length:calc(10px*var(--fs))] tabular-nums text-white/40">
                       {VESSEL_TRACKS.length}
@@ -1166,11 +1174,18 @@ export default function HomePage() {
                   <div className="mt-1 space-y-0.5 border-t border-white/10 px-2 pb-1 pt-2 text-[length:calc(9.5px*var(--fs))] leading-relaxed text-white/40">
                     <p>{t("heightByThroughput", lang)}</p>
                     <p>{t("colourByCategory", lang)}</p>
-                    {showVessels && (
+                    {VESSEL_TRACKS.length > 0 && (
+                      <p>
+                        {lang === "zh"
+                          ? "船隻標記顯示其最後記錄的 AIS 位置；開啟航線可重播該次航行的路徑。"
+                          : "Vessel markers show the last recorded AIS position; switch on the route to replay the trip it sailed."}
+                      </p>
+                    )}
+                    {showVesselRoutes && (
                       <p>
                         {lang === "zh"
                           ? "航線為船隻實際廣播的 AIS 位置記錄。"
-                          : "Routes are real AIS positions broadcast by the vessel."}
+                          : "The route is the vessel's own AIS position records."}
                       </p>
                     )}
                   </div>

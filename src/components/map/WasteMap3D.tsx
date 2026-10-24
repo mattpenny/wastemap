@@ -67,8 +67,12 @@ export interface WasteMap3DProps {
   visibleCategories: FacilityCategory[];
   /** When true, show a "no facilities" hint instead of an empty map. */
   emptyHint?: boolean;
-  /** Animate the recorded AIS vessel tracks over the sea. */
-  showVessels?: boolean;
+  /**
+   * Animate the recorded AIS routes. The vessel markers themselves are always
+   * drawn whenever a track exists — this switch adds the route, the wake and
+   * the playback on top of them.
+   */
+  showVesselRoutes?: boolean;
   /**
    * Fired on a *user-initiated* map move (pan / zoom / rotate / pitch). Used by
    * the mobile UI to collapse its floating sheets. Programmatic moves (e.g. the
@@ -185,8 +189,33 @@ function vesselIconFor(hex: string): string {
 
 const VESSEL_ICON_SIZE = { width: 64, height: 64, anchorX: 32, anchorY: 32 };
 
-/** Vessel marker size in screen pixels, constant at every zoom. */
-const VESSEL_SIZE_PX = 30;
+/**
+ * Vessel marker size in screen pixels.
+ *
+ * Matched to PIN_SIZE_PX on purpose: the facility pin and the vessel marker are
+ * the two "one of these, here" markers on the map, so they should carry the
+ * same visual weight. Measured on the running map, the boat silhouette inside
+ * the 64x64 icon fills roughly 16x43 of it, and deck.gl draws the icon in the
+ * ground plane, so the default 50 degree pitch foreshortens it further — at 30
+ * the marker came out barely 11 px tall, which is a poor hover target.
+ */
+const VESSEL_SIZE_PX = 46;
+
+/**
+ * What the vessel marker carries. Kept on the object rather than looked up
+ * at pick time so the hover tooltip can name the vessel without a second
+ * pass over the tracks.
+ */
+interface VesselMarker {
+  position: [number, number];
+  /** Course over ground, degrees clockwise from true north. */
+  course: number | null;
+  name: string;
+  mmsi: string;
+  /** Epoch ms of the report the marker is sitting on. */
+  t: number;
+  sog: number | null;
+}
 
 /**
  * How much of the recorded track the wake behind the vessel covers.
@@ -225,7 +254,7 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
     lang,
     visibleCategories,
     emptyHint = false,
-    showVessels = false,
+    showVesselRoutes = false,
     onUserMapInteract,
   },
   ref
@@ -278,11 +307,11 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
    * single site — at zoom 13.4 a 2.5 km column is absurd.
    */
   const [zoom, setZoom] = useState(HK_ZOOM);
-  const [hovered, setHovered] = useState<{
-    facility: FacilityProperties;
-    x: number;
-    y: number;
-  } | null>(null);
+  const [hovered, setHovered] = useState<
+    | { facility: FacilityProperties; x: number; y: number }
+    | { vessel: VesselMarker; x: number; y: number }
+    | null
+  >(null);
 
   /** Visible facilities after the category filter is applied. */
   const shown = useMemo(
@@ -554,87 +583,141 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
       : null;
 
     // ------------------------------------------------------------------
-    // Recorded vessel routes
+    // Vessels
     // ------------------------------------------------------------------
-    // Three layers per vessel: the route it actually sailed, a bright wake
-    // trailing the marker, and the vessel itself rotated to its real course.
+    // Two separate things, on two separate switches:
+    //
+    //  1. A marker on each vessel's LAST recorded position — always on
+    //     whenever a track exists. That is the vessel's current known
+    //     location, and it is what the map shows by default.
+    //  2. The route it sailed to get there — only when the user asks for
+    //     it. The marker then rides the interpolated position, with the
+    //     route line, a wake, and a dot on every real AIS report.
+    //
     // Everything is driven by the recorded AIS reports — see `vesselTracks.ts`.
-    const vesselLayers = showVessels
-      ? VESSEL_TRACKS.flatMap((track) => {
-          const path = track.points.map(
-            (p) => [p.lng, p.lat] as [number, number],
-          );
-          const color = vesselColor(track.mmsi);
-          const t0 = track.points[0].t;
-          const duration = trackDurationMs(track);
-          if (duration <= 0) return [];
+    const vesselLayers = VESSEL_TRACKS.flatMap((track) => {
+      const color = vesselColor(track.mmsi);
+      const points = track.points;
+      const first = points[0];
+      const last = points[points.length - 1];
+      const duration = trackDurationMs(track);
 
-          // Each vessel runs on its own clock: the tracks have very different
-          // lengths (one passage vs. a few minutes of manoeuvring), and a
-          // shared clock would make the short one vanish for most of the loop.
-          const now = vesselTimeRef.current % duration;
-          const at = positionAtTime(track, t0 + now);
-          // A barge reports only every few minutes, so the wake is what makes
-          // the motion read as continuous rather than as a dot hopping between
-          // reports.
-          const wake = trailBefore(track, t0 + now, VESSEL_TRAIL_MS);
+      // The marker. Sitting on the last report by default; riding the
+      // interpolated position while the route plays back.
+      const marker: VesselMarker = {
+        position: [last.lng, last.lat],
+        course: last.cog,
+        name: track.name,
+        mmsi: track.mmsi,
+        t: last.t,
+        sog: last.sog,
+      };
+      let routePath: [number, number][] | null = null;
+      let reportDots: [number, number][] | null = null;
+      let wake: [number, number][] | null = null;
 
-          return [
-            new PathLayer<[number, number][]>({
-              id: `vessel-route-${track.mmsi}`,
-              data: [path],
-              getPath: (d: [number, number][]) => d,
-              getColor: [...color.rgb, 110],
-              getWidth: 2,
-              widthUnits: "pixels",
-              widthMinPixels: 1.5,
-              capRounded: true,
-              jointRounded: true,
-            }),
-            ...(wake
-              ? [
-                  new PathLayer<[number, number][]>({
-                    id: `vessel-wake-${track.mmsi}`,
-                    data: [wake],
-                    getPath: (d: [number, number][]) => d,
-                    getColor: [...color.rgb, 240],
-                    getWidth: 3,
-                    widthUnits: "pixels",
-                    widthMinPixels: 2,
-                    capRounded: true,
-                    jointRounded: true,
-                  }),
-                ]
-              : []),
-            // The vessel itself. Dropped when the playback clock sits outside
-            // the recorded span, so the marker never appears where the ship
-            // was not actually reported.
-            ...(at
-              ? [
-                  new IconLayer<{ position: [number, number]; course: number | null }>({
-                    id: `vessel-icon-${track.mmsi}`,
-                    data: [{ position: at.position, course: at.course }],
-                    billboard: true,
-                    sizeUnits: "pixels",
-                    getSize: VESSEL_SIZE_PX,
-                    getPosition: (d) => d.position,
-                    getIcon: () => ({
-                      url: vesselIconFor(color.hex),
-                      ...VESSEL_ICON_SIZE,
-                    }),
-                    // AIS course is clockwise from north; deck.gl angles are
-                    // counter-clockwise, hence the negation.
-                    getAngle: (d) => (d.course == null ? 0 : -d.course),
-                    loadOptions: { image: { type: "image" } },
-                  }),
-                ]
-              : []),
-          ];
-        })
-      : [];
+      if (showVesselRoutes && duration > 0) {
+        routePath = points.map((p) => [p.lng, p.lat] as [number, number]);
+        // A dot on every recorded report, so the line between two reports
+        // reads as interpolation rather than as a surveyed course.
+        reportDots = routePath;
+
+        // Each vessel runs on its own clock: the tracks have very different
+        // lengths (one passage vs. a few minutes of manoeuvring), and a
+        // shared clock would make the short one vanish for most of the loop.
+        const now = vesselTimeRef.current % duration;
+        const at = positionAtTime(track, first.t + now);
+        // A barge reports only every few minutes, so the wake is what makes
+        // the motion read as continuous rather than as a dot hopping between
+        // reports.
+        wake = trailBefore(track, first.t + now, VESSEL_TRAIL_MS);
+        if (at) {
+          marker.position = at.position;
+          marker.course = at.course;
+          marker.t = first.t + now;
+          marker.sog = at.sog;
+        }
+      }
+
+      return [
+        ...(routePath
+          ? [
+              new PathLayer<[number, number][]>({
+                id: `vessel-route-${track.mmsi}`,
+                data: [routePath],
+                getPath: (d: [number, number][]) => d,
+                getColor: [...color.rgb, 110],
+                getWidth: 2,
+                widthUnits: "pixels",
+                widthMinPixels: 1.5,
+                capRounded: true,
+                jointRounded: true,
+              }),
+            ]
+          : []),
+        ...(wake
+          ? [
+              new PathLayer<[number, number][]>({
+                id: `vessel-wake-${track.mmsi}`,
+                data: [wake],
+                getPath: (d: [number, number][]) => d,
+                getColor: [...color.rgb, 240],
+                getWidth: 3,
+                widthUnits: "pixels",
+                widthMinPixels: 2,
+                capRounded: true,
+                jointRounded: true,
+              }),
+            ]
+          : []),
+        ...(reportDots
+          ? [
+              // The vessel's own AIS reports. Small, but they are the only
+              // part of the line that is measured rather than interpolated.
+              new ScatterplotLayer<[number, number]>({
+                id: `vessel-reports-${track.mmsi}`,
+                data: reportDots,
+                getPosition: (d) => d,
+                getFillColor: [...color.rgb, 235],
+                getLineColor: [255, 255, 255, 200],
+                stroked: true,
+                getRadius: 2.4,
+                radiusUnits: "pixels",
+                lineWidthUnits: "pixels",
+                getLineWidth: 0.8,
+              }),
+            ]
+          : []),
+        new IconLayer<VesselMarker>({
+          id: `vessel-icon-${track.mmsi}`,
+          data: [marker],
+          billboard: true,
+          sizeUnits: "pixels",
+          getSize: VESSEL_SIZE_PX,
+          getPosition: (d) => d.position,
+          getIcon: () => ({
+            url: vesselIconFor(color.hex),
+            ...VESSEL_ICON_SIZE,
+          }),
+          // AIS course is clockwise from north; deck.gl angles are
+          // counter-clockwise, hence the negation.
+          getAngle: (d) => (d.course == null ? 0 : -d.course),
+          loadOptions: { image: { type: "image" } },
+          // Hoverable so the vessel can name itself.
+          pickable: true,
+        }),
+      ];
+    });
 
     return [baseLayer, ...columnLayers, ...(pinLayer ? [pinLayer] : []), ...vesselLayers];
-  }, [shown, selectedId, heightFor, elevationScale, landfillScale, showVessels]);
+  }, [
+    shown,
+    selectedId,
+    heightFor,
+    elevationScale,
+    landfillScale,
+    showVesselRoutes,
+  ]);
 
   // ------------------------------------------------------------------
   // Initialise the map exactly once
@@ -994,7 +1077,7 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
   // back here. Only deck.gl props are pushed — React never re-renders, so the
   // 30fps clock costs nothing in the component tree.
   useEffect(() => {
-    if (!showVessels || VESSEL_TRACKS.length === 0) return;
+    if (!showVesselRoutes || VESSEL_TRACKS.length === 0) return;
     if (Math.max(...VESSEL_TRACKS.map(trackDurationMs)) <= 0) return;
 
     let frame = 0;
@@ -1015,7 +1098,7 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
 
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
-  }, [showVessels, pushLayers]);
+  }, [showVesselRoutes, pushLayers]);
 
   // ------------------------------------------------------------------
   // Swap basemap. For the official map the language is part of the style
@@ -1115,6 +1198,13 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
       setHovered(null);
       return;
     }
+    // Vessel markers share the overlay with the facility layers, so tell them
+    // apart by the layer that produced the pick.
+    if (info.layer?.id?.startsWith("vessel-icon-")) {
+      const v = info.object as VesselMarker;
+      setHovered({ vessel: v, x: info.x, y: info.y });
+      return;
+    }
     const facility = info.object as FacilityProperties;
     setHovered({ facility, x: info.x, y: info.y });
   }, []);
@@ -1144,8 +1234,35 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
         style={{ touchAction: "none" }}
       />
 
-      {/* Cursor-following tooltip */}
-      {hovered && !selectedId && (
+      {/* Cursor-following tooltip — vessel marker */}
+      {hovered && !selectedId && "vessel" in hovered && (
+        <div
+          className="pointer-events-none absolute z-30 hidden max-w-[260px] -translate-y-full rounded-xl border border-white/15 bg-slate-900/95 px-3 py-2.5 shadow-2xl backdrop-blur-md sm:block"
+          style={{
+            left: Math.min(hovered.x + 14, (containerRef.current?.clientWidth ?? 0) - 280),
+            top: Math.max(hovered.y - 12, 90),
+          }}
+        >
+          <p className="text-[length:calc(13px*var(--fs))] font-semibold leading-tight text-white">
+            {hovered.vessel.name}
+          </p>
+          <p className="mt-0.5 text-[length:calc(10px*var(--fs))] uppercase tracking-wider text-white/45">
+            {lang === "zh" ? "廢物運輸船" : "Waste carrier"}
+            {hovered.vessel.mmsi ? ` · MMSI ${hovered.vessel.mmsi}` : ""}
+          </p>
+          <p className="mt-1.5 text-[length:calc(10px*var(--fs))] tabular-nums text-white/60">
+            {hovered.vessel.position[1].toFixed(5)}, {hovered.vessel.position[0].toFixed(5)}
+          </p>
+          <p className="mt-0.5 text-[length:calc(10px*var(--fs))] text-white/45">
+            {lang === "zh" ? "AIS 位置匯報" : "AIS report"}{" "}
+            {new Date(hovered.vessel.t).toISOString().replace("T", " ").slice(0, 16)} UTC
+            {hovered.vessel.sog != null && ` · ${hovered.vessel.sog.toFixed(1)} kn`}
+          </p>
+        </div>
+      )}
+
+      {/* Cursor-following tooltip — facility column */}
+      {hovered && !selectedId && "facility" in hovered && (
         <div
           className="pointer-events-none absolute z-30 hidden max-w-[260px] -translate-y-full rounded-xl border border-white/15 bg-slate-900/95 px-3 py-2.5 shadow-2xl backdrop-blur-md sm:block"
           style={{
