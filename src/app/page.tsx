@@ -51,6 +51,17 @@ const FONT_SCALE_MIN = 0.9;
 const FONT_SCALE_MAX = 1.8;
 const FONT_SCALE_STEP = 0.1;
 
+/**
+ * Total AIS reports across every recorded track. Shown in the legend when the
+ * route is on: a vessel reports roughly once a minute, so a handful of reports
+ * is why the drawn route is a few long straight legs rather than a smooth
+ * sailed course. Better to say so than to let it read as a rendering bug.
+ */
+const VESSEL_REPORT_COUNT = VESSEL_TRACKS.reduce(
+  (total, track) => total + track.points.length,
+  0
+);
+
 /** Quick group filters shown on the intake card. */
 const GROUP_PRESETS: Array<{
   id: string;
@@ -482,8 +493,15 @@ export default function HomePage() {
    * Selection from a click on the map itself. Same contract as picking a row
    * in the ranking card: the facility becomes selected AND the camera flies in
    * to it, so "click a pillar" and "click its row" behave identically.
+   *
+   * The map overlay shares one click handler across the facility and vessel
+   * layers. A vessel marker has no `id`, and the drawer dereferences
+   * `category` and `metrics`, so anything without an id is not a site — ignore
+   * it rather than trusting the caller. This is what turned a stray click on a
+   * ship into "a client-side exception has occurred".
    */
   const handleSelect = useCallback((facility: FacilityProperties | null) => {
+    if (facility && typeof facility.id !== "string") return;
     setSelected(facility);
     if (facility && facility.id !== selectedIdRef.current) {
       mapHandle.current?.focusFacility(facility.id);
@@ -1184,8 +1202,8 @@ export default function HomePage() {
                     {showVesselRoutes && (
                       <p>
                         {lang === "zh"
-                          ? "航線為船隻實際廣播的 AIS 位置記錄。"
-                          : "The route is the vessel's own AIS position records."}
+                          ? `航線由 ${VESSEL_REPORT_COUNT} 個 AIS 位置匯報連接而成。船隻約每分鐘匯報一次，因此兩點之間是直線段，並非實測航道。`
+                          : `The route joins ${VESSEL_REPORT_COUNT} AIS reports. A vessel reports about once a minute, so the legs between them are straight lines, not a surveyed channel.`}
                       </p>
                     )}
                   </div>

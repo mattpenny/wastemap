@@ -1212,6 +1212,24 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
   const handleClick = useCallback(
     (info: PickingInfo) => {
       if (!info.object) return;
+
+      // Vessel markers share this click handler with the facility layers, but
+      // they are NOT facilities: a `VesselMarker` has no `id`, `category` or
+      // `metrics`, and the drawer dereferences all three. Passing one through
+      // crashed the whole page, so a vessel click is handled here instead —
+      // clear any open site, then frame the ship.
+      if (info.layer?.id?.startsWith("vessel-icon-")) {
+        const vessel = info.object as VesselMarker;
+        onSelectFacility(null);
+        mapRef.current?.flyTo({
+          center: vessel.position,
+          zoom: 14.5,
+          duration: 1200,
+          essential: true,
+        });
+        return;
+      }
+
       onSelectFacility(info.object as FacilityProperties);
     },
     [onSelectFacility]
