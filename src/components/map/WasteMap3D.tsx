@@ -11,7 +11,7 @@ import {
 } from "react";
 import maplibregl, { type Map as MapLibreMap } from "maplibre-gl";
 import { MapboxOverlay } from "@deck.gl/mapbox";
-import { ColumnLayer, IconLayer, ScatterplotLayer } from "@deck.gl/layers";
+import { ColumnLayer, IconLayer, PathLayer, ScatterplotLayer } from "@deck.gl/layers";
 import { AmbientLight, DirectionalLight, LightingEffect } from "@deck.gl/core";
 import type { PickingInfo } from "@deck.gl/core";
 
@@ -20,6 +20,12 @@ import { CATEGORY_META, CATEGORY_ORDER } from "@/lib/categories";
 import { groupHex, groupRgb } from "@/lib/facilityColors";
 import { t, type Lang } from "@/lib/i18n";
 import { prefetchUnderlayTiles } from "@/lib/prefetchBasemap";
+import {
+  VESSEL_TRACKS,
+  positionAtTime,
+  trackDurationMs,
+  trailBefore,
+} from "@/lib/vesselTracks";
 import { formatNumber } from "@/lib/utils";
 import {
   HK_BEARING,
@@ -55,6 +61,8 @@ export interface WasteMap3DProps {
   visibleCategories: FacilityCategory[];
   /** When true, show a "no facilities" hint instead of an empty map. */
   emptyHint?: boolean;
+  /** Animate the recorded AIS vessel tracks over the sea. */
+  showVessels?: boolean;
   /**
    * Fired on a *user-initiated* map move (pan / zoom / rotate / pitch). Used by
    * the mobile UI to collapse its floating sheets. Programmatic moves (e.g. the
@@ -127,6 +135,71 @@ function pinFor(hex: string): string {
 
 const PIN_ICON_SIZE = { width: 64, height: 80, anchorX: 32, anchorY: 80 };
 
+/**
+ * Recorded vessel routes.
+ *
+ * Each tracked vessel gets its own colour so two routes on screen at once are
+ * distinguishable, and so neither can be mistaken for a facility category
+ * (the categories use red / green / emerald / amber / violet).
+ */
+const VESSEL_COLORS: Record<string, { hex: string; rgb: [number, number, number] }> = {
+  "477997242": { hex: "#38bdf8", rgb: [56, 189, 248] }, // NGON SHUEN II
+  "477997306": { hex: "#f472b6", rgb: [244, 114, 182] }, // LAI WAN II
+};
+const VESSEL_COLOR_FALLBACK = { hex: "#e2e8f0", rgb: [226, 232, 240] };
+
+function vesselColor(mmsi: string) {
+  return VESSEL_COLORS[mmsi] ?? VESSEL_COLOR_FALLBACK;
+}
+
+/**
+ * Top-down vessel silhouette, pointing north (course 0). The layer rotates it
+ * to the vessel's real course over ground, so it always noses the way it is
+ * actually heading. Built as an inline SVG data URI for the same reason as the
+ * pin: no network request, no sprite atlas.
+ */
+function vesselIconUri(hex: string): string {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+<path d="M32 4 C40 20 42 32 42 42 L42 50 Q32 57 22 50 L22 42 C22 32 24 20 32 4 Z"
+ fill="${hex}" stroke="#ffffff" stroke-width="3" stroke-linejoin="round"/>
+<path d="M32 13 L32 44" stroke="#ffffff" stroke-width="2" stroke-opacity="0.5"/>
+</svg>`;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+const VESSEL_ICON_CACHE = new Map<string, string>();
+function vesselIconFor(hex: string): string {
+  let uri = VESSEL_ICON_CACHE.get(hex);
+  if (!uri) {
+    uri = vesselIconUri(hex);
+    VESSEL_ICON_CACHE.set(hex, uri);
+  }
+  return uri;
+}
+
+const VESSEL_ICON_SIZE = { width: 64, height: 64, anchorX: 32, anchorY: 32 };
+
+/** Vessel marker size in screen pixels, constant at every zoom. */
+const VESSEL_SIZE_PX = 30;
+
+/**
+ * How much of the recorded track the wake behind the vessel covers.
+ * A barge reports every few minutes, so the trail is what makes the motion
+ * read as continuous rather than as a dot jumping between reports.
+ */
+const VESSEL_TRAIL_MS = 12 * 60 * 1000;
+
+/**
+ * Playback speed. A real West Kowloon to Shek Kwu Chau run takes one to two
+ * hours, which at 1x would look like a parked boat — so the recording is
+ * played back 60x faster (a 90-minute passage in 90 seconds) and loops.
+ * The positions are the vessel's real ones; only the clock is compressed.
+ */
+const VESSEL_TIME_SCALE = 60;
+
+/** Animation frame budget, in milliseconds. 30fps is plenty for a slow vessel. */
+const VESSEL_FRAME_MS = 33;
+
 /** One-time lighting rig — without it the extruded columns read as flat shapes. */
 const lightingEffect = new LightingEffect({
   ambient: new AmbientLight({ color: [255, 255, 255], intensity: 1.15 }),
@@ -146,6 +219,7 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
     lang,
     visibleCategories,
     emptyHint = false,
+    showVessels = false,
     onUserMapInteract,
   },
   ref
@@ -153,6 +227,14 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const overlayRef = useRef<MapboxOverlay | null>(null);
+
+  /**
+   * Playback position of the vessel animation, in milliseconds since the start
+   * of the longest recorded track. A ref rather than state on purpose: it
+   * changes every frame, and re-rendering React 30 times a second to move a
+   * boat would be wasteful.
+   */
+  const vesselTimeRef = useRef(0);
 
   // The mount-once effect must not capture a stale callback, so keep the
   // latest selection handler in a ref.
@@ -465,8 +547,88 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
         })
       : null;
 
-    return [baseLayer, ...columnLayers, ...(pinLayer ? [pinLayer] : [])];
-  }, [shown, selectedId, heightFor, elevationScale, landfillScale]);
+    // ------------------------------------------------------------------
+    // Recorded vessel routes
+    // ------------------------------------------------------------------
+    // Three layers per vessel: the route it actually sailed, a bright wake
+    // trailing the marker, and the vessel itself rotated to its real course.
+    // Everything is driven by the recorded AIS reports — see `vesselTracks.ts`.
+    const vesselLayers = showVessels
+      ? VESSEL_TRACKS.flatMap((track) => {
+          const path = track.points.map(
+            (p) => [p.lng, p.lat] as [number, number],
+          );
+          const color = vesselColor(track.mmsi);
+          const t0 = track.points[0].t;
+          const duration = trackDurationMs(track);
+          if (duration <= 0) return [];
+
+          // Each vessel runs on its own clock: the tracks have very different
+          // lengths (one passage vs. a few minutes of manoeuvring), and a
+          // shared clock would make the short one vanish for most of the loop.
+          const now = vesselTimeRef.current % duration;
+          const at = positionAtTime(track, t0 + now);
+          // A barge reports only every few minutes, so the wake is what makes
+          // the motion read as continuous rather than as a dot hopping between
+          // reports.
+          const wake = trailBefore(track, t0 + now, VESSEL_TRAIL_MS);
+
+          return [
+            new PathLayer<[number, number][]>({
+              id: `vessel-route-${track.mmsi}`,
+              data: [path],
+              getPath: (d: [number, number][]) => d,
+              getColor: [...color.rgb, 110],
+              getWidth: 2,
+              widthUnits: "pixels",
+              widthMinPixels: 1.5,
+              capRounded: true,
+              jointRounded: true,
+            }),
+            ...(wake
+              ? [
+                  new PathLayer<[number, number][]>({
+                    id: `vessel-wake-${track.mmsi}`,
+                    data: [wake],
+                    getPath: (d: [number, number][]) => d,
+                    getColor: [...color.rgb, 240],
+                    getWidth: 3,
+                    widthUnits: "pixels",
+                    widthMinPixels: 2,
+                    capRounded: true,
+                    jointRounded: true,
+                  }),
+                ]
+              : []),
+            // The vessel itself. Dropped when the playback clock sits outside
+            // the recorded span, so the marker never appears where the ship
+            // was not actually reported.
+            ...(at
+              ? [
+                  new IconLayer<{ position: [number, number]; course: number | null }>({
+                    id: `vessel-icon-${track.mmsi}`,
+                    data: [{ position: at.position, course: at.course }],
+                    billboard: true,
+                    sizeUnits: "pixels",
+                    getSize: VESSEL_SIZE_PX,
+                    getPosition: (d) => d.position,
+                    getIcon: () => ({
+                      url: vesselIconFor(color.hex),
+                      ...VESSEL_ICON_SIZE,
+                    }),
+                    // AIS course is clockwise from north; deck.gl angles are
+                    // counter-clockwise, hence the negation.
+                    getAngle: (d) => (d.course == null ? 0 : -d.course),
+                    loadOptions: { image: { type: "image" } },
+                  }),
+                ]
+              : []),
+          ];
+        })
+      : [];
+
+    return [baseLayer, ...columnLayers, ...(pinLayer ? [pinLayer] : []), ...vesselLayers];
+  }, [shown, selectedId, heightFor, elevationScale, landfillScale, showVessels]);
 
   // ------------------------------------------------------------------
   // Initialise the map exactly once
@@ -804,7 +966,7 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
   // ------------------------------------------------------------------
   // Push layers whenever data / selection / filter changes
   // ------------------------------------------------------------------
-  useEffect(() => {
+  const pushLayers = useCallback(() => {
     if (!overlayRef.current) return;
     overlayRef.current.setProps({
       layers: buildLayers(),
@@ -813,6 +975,41 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
         isHovering ? "pointer" : "grab",
     });
   }, [buildLayers]);
+
+  useEffect(() => {
+    pushLayers();
+  }, [pushLayers]);
+
+  // ------------------------------------------------------------------
+  // Animate the recorded vessel routes
+  // ------------------------------------------------------------------
+  // Collection has to run locally (AISStream needs a long-lived WebSocket,
+  // which a serverless function cannot hold), so the map plays the recording
+  // back here. Only deck.gl props are pushed — React never re-renders, so the
+  // 30fps clock costs nothing in the component tree.
+  useEffect(() => {
+    if (!showVessels || VESSEL_TRACKS.length === 0) return;
+    if (Math.max(...VESSEL_TRACKS.map(trackDurationMs)) <= 0) return;
+
+    let frame = 0;
+    let last = performance.now();
+
+    const tick = (now: number) => {
+      frame = requestAnimationFrame(tick);
+      const dt = now - last;
+      if (dt < VESSEL_FRAME_MS) return;
+      last = now;
+      // Deliberately not wrapped: each vessel takes its own modulo against its
+      // own track length in buildLayers, so wrapping the shared clock here
+      // would just make every vessel snap back to its start at the same
+      // instant. A float stays exact for centuries at this magnitude.
+      vesselTimeRef.current += dt * VESSEL_TIME_SCALE;
+      pushLayers();
+    };
+
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [showVessels, pushLayers]);
 
   // ------------------------------------------------------------------
   // Swap basemap. For the official map the language is part of the style

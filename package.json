@@ -11,7 +11,9 @@
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "ingest": "node scripts/ingest-weighbridge.mjs"
+    "ingest": "node scripts/ingest-weighbridge.mjs",
+    "ais:collect": "node scripts/collect-ais.mjs",
+    "ais:status": "node scripts/collect-ais.mjs --status"
   },
   "dependencies": {
     "@deck.gl/core": "^9.4.0",

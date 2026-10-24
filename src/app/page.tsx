@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 
 import type { WasteMap3DHandle, WasteMap3DProps } from "@/components/map/WasteMap3D";
+import { VESSEL_TRACKS } from "@/lib/vesselTracks";
 import type { MapStyleId } from "@/components/map/mapStyles";
 import { DEFAULT_MAP_STYLE } from "@/components/map/mapStyles";
 import FacilityDetailDrawer from "@/components/ui/FacilityDetailDrawer";
@@ -319,6 +320,12 @@ export default function HomePage() {
   const [fontScale, setFontScale] = useState(FONT_SCALE_DEFAULT);
   /** OITF and any other grouped facilities start collapsed. */
   const [expandedGroups, setExpandedGroups] = useState<string[]>([]);
+  /**
+   * Animate the recorded AIS vessel tracks. Off by default — the routes are a
+   * supporting layer, not the point of the map, and they only exist once a
+   * vessel has actually sailed while the collector was running.
+   */
+  const [showVessels, setShowVessels] = useState(false);
   /**
    * Measured intake, keyed by station code, from `/api/station-data`. Only the
    * stations that report weighbridge data appear here; the rest simply have no
@@ -672,6 +679,7 @@ export default function HomePage() {
           mapStyle={mapStyle}
           lang={lang}
           visibleCategories={visibleCategories}
+          showVessels={showVessels}
           emptyHint={!loading && visibleFacilities.length === 0}
           onUserMapInteract={handleUserMapInteract}
         />
@@ -1069,6 +1077,41 @@ export default function HomePage() {
 
               {legendOpen && (
                 <div className="space-y-1 border-t border-white/10 px-2 py-2">
+                  {/* Vessel routes. Deliberately NOT a category checkbox: it is a
+                      different kind of layer, so it sits above the facility
+                      categories rather than beside them. Disabled until a
+                      vessel has actually sailed while the collector ran — there
+                      is nothing honest to draw from a stationary ship. */}
+                  <button
+                    onClick={() => setShowVessels((v) => !v)}
+                    aria-pressed={showVessels}
+                    disabled={VESSEL_TRACKS.length === 0}
+                    title={
+                      VESSEL_TRACKS.length === 0
+                        ? "No recorded vessel route yet — run `npm run ais:collect` while a vessel is sailing."
+                        : undefined
+                    }
+                    className={cn(
+                      "flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60",
+                      VESSEL_TRACKS.length === 0
+                        ? "cursor-not-allowed opacity-40"
+                        : showVessels
+                          ? "hover:bg-white/8"
+                          : "opacity-50 hover:opacity-80"
+                    )}
+                  >
+                    <span
+                      className="h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-white/20"
+                      style={{ backgroundColor: "#38bdf8" }}
+                    />
+                    <span className="flex-1 truncate text-[length:calc(11.5px*var(--fs))] font-medium text-white/85">
+                      {lang === "zh" ? "廢物運輸船航線" : "Vessel routes (AIS)"}
+                    </span>
+                    <span className="text-[length:calc(10px*var(--fs))] tabular-nums text-white/40">
+                      {VESSEL_TRACKS.length}
+                    </span>
+                  </button>
+
                   {CATEGORY_ORDER.map((category) => {
                     const meta = CATEGORY_META[category];
                     const active = visibleCategories.includes(category);
@@ -1110,6 +1153,13 @@ export default function HomePage() {
                   <div className="mt-1 space-y-0.5 border-t border-white/10 px-2 pb-1 pt-2 text-[length:calc(9.5px*var(--fs))] leading-relaxed text-white/40">
                     <p>{t("heightByThroughput", lang)}</p>
                     <p>{t("colourByCategory", lang)}</p>
+                    {showVessels && (
+                      <p>
+                        {lang === "zh"
+                          ? "航線為船隻實際廣播的 AIS 位置記錄。"
+                          : "Routes are real AIS positions broadcast by the vessel."}
+                      </p>
+                    )}
                   </div>
                 </div>
               )}
