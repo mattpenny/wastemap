@@ -50,6 +50,12 @@ export interface WasteMap3DHandle {
   resetView: () => void;
   /** Fly to a facility and select it. */
   focusFacility: (id: string) => void;
+  /**
+   * Fly to a framing that contains every recorded vessel route. The tracks are
+   * only a few kilometres long, so at the territory overview they are a
+   * handful of pixels — toggling the layer on should put them on screen.
+   */
+  focusVessels: () => void;
 }
 
 export interface WasteMap3DProps {
@@ -1063,6 +1069,39 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
           duration: 1400,
           essential: true,
         });
+      },
+      focusVessels: () => {
+        const map = mapRef.current;
+        if (!map || VESSEL_TRACKS.length === 0) return;
+        // Bounding box of every recorded point, with a little sea around it.
+        let minLng = Infinity;
+        let minLat = Infinity;
+        let maxLng = -Infinity;
+        let maxLat = -Infinity;
+        for (const track of VESSEL_TRACKS) {
+          for (const p of track.points) {
+            if (p.lng < minLng) minLng = p.lng;
+            if (p.lng > maxLng) maxLng = p.lng;
+            if (p.lat < minLat) minLat = p.lat;
+            if (p.lat > maxLat) maxLat = p.lat;
+          }
+        }
+        const spanLng = maxLng - minLng;
+        const spanLat = maxLat - minLat;
+        const pad = 0.25; // ~a quarter of the extent, on every side
+        const bounds: [[number, number], [number, number]] = [
+          [minLng - spanLng * pad - 0.002, minLat - spanLat * pad - 0.002],
+          [maxLng + spanLng * pad + 0.002, maxLat + spanLat * pad + 0.002],
+        ];
+        // Top-down: the routes are flat lines on the sea, and a pitched camera
+        // would foreshorten them into the water.
+        const camera = map.cameraForBounds(bounds, {
+          padding: 90,
+          bearing: 0,
+          pitch: 0,
+          maxZoom: 14,
+        });
+        map.flyTo({ ...camera, duration: 1400, essential: true });
       },
     }),
     [facilities]

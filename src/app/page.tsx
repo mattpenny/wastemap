@@ -491,6 +491,19 @@ export default function HomePage() {
   const handleClose = useCallback(() => setSelected(null), []);
 
   /**
+   * Vessel routes on / off. Switching on also flies the camera to the
+   * recorded tracks: they are a few kilometres long, so at the territory
+   * overview they would otherwise be a handful of pixels the user has to go
+   * looking for. Switching off leaves the camera where it is.
+   */
+  const toggleVessels = useCallback(() => {
+    setShowVessels((v) => {
+      if (!v) mapHandle.current?.focusVessels();
+      return !v;
+    });
+  }, []);
+
+  /**
    * Bottom-dock tabs (phones only).
    *
    * Below lg the three panels are mutually exclusive: they are sheets stacked
@@ -1083,7 +1096,7 @@ export default function HomePage() {
                       vessel has actually sailed while the collector ran — there
                       is nothing honest to draw from a stationary ship. */}
                   <button
-                    onClick={() => setShowVessels((v) => !v)}
+                    onClick={toggleVessels}
                     aria-pressed={showVessels}
                     disabled={VESSEL_TRACKS.length === 0}
                     title={
