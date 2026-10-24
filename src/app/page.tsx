@@ -13,6 +13,7 @@ import {
 } from "react";
 import {
   AlertTriangle,
+  Check,
   ChevronDown,
   ChevronUp,
   Layers,
@@ -20,11 +21,17 @@ import {
   Map as MapIcon,
   RotateCcw,
   Satellite,
+  Ship,
   SlidersHorizontal,
 } from "lucide-react";
 
 import type { WasteMap3DHandle, WasteMap3DProps } from "@/components/map/WasteMap3D";
-import { VESSEL_TRACKS } from "@/lib/vesselTracks";
+import {
+  VESSEL_DATA_SPAN,
+  VESSEL_RETENTION_MS,
+  VESSEL_TRACKS,
+  vesselColor,
+} from "@/lib/vesselTracks";
 import type { MapStyleId } from "@/components/map/mapStyles";
 import { DEFAULT_MAP_STYLE } from "@/components/map/mapStyles";
 import FacilityDetailDrawer from "@/components/ui/FacilityDetailDrawer";
@@ -40,7 +47,13 @@ import { facilityHex, rankingFacilityHex, rgbaFor } from "@/lib/facilityColors";
 import { t, type Lang } from "@/lib/i18n";
 import type { WeighbridgeStation } from "@/lib/weighbridge";
 import { loadWeighbridgeDataset } from "@/lib/weighbridgeClient";
-import { cn, formatNumber } from "@/lib/utils";
+import {
+  cn,
+  formatLocalTime,
+  formatNumber,
+  fromDateTimeLocalValue,
+  toDateTimeLocalValue,
+} from "@/lib/utils";
 
 // Facility data now comes from the WASTE_FACILITIES_DATA import, so the
 // client needs no GeoJSON envelope.
@@ -50,17 +63,6 @@ const FONT_SCALE_DEFAULT = 1.2;
 const FONT_SCALE_MIN = 0.9;
 const FONT_SCALE_MAX = 1.8;
 const FONT_SCALE_STEP = 0.1;
-
-/**
- * Total AIS reports across every recorded track. Shown in the legend when the
- * route is on: a vessel reports roughly once a minute, so a handful of reports
- * is why the drawn route is a few long straight legs rather than a smooth
- * sailed course. Better to say so than to let it read as a rendering bug.
- */
-const VESSEL_REPORT_COUNT = VESSEL_TRACKS.reduce(
-  (total, track) => total + track.points.length,
-  0
-);
 
 /** Quick group filters shown on the intake card. */
 const GROUP_PRESETS: Array<{
@@ -340,6 +342,34 @@ export default function HomePage() {
    */
   const [showVesselRoutes, setShowVesselRoutes] = useState(false);
   /**
+   * Which vessels to draw at all, by MMSI. Empty by default — the vessels are
+   * an optional layer on a map of facilities, so nothing appears over the
+   * harbour until the user asks for a ship by name.
+   */
+  const [visibleVessels, setVisibleVessels] = useState<string[]>([]);
+  /** The vessel picker popover. */
+  const [vesselMenuOpen, setVesselMenuOpen] = useState(false);
+  /**
+   * Where the popover sits, in viewport coordinates.
+   *
+   * Measured from the button rather than left to CSS: on a phone the picker is
+   * near the middle of a wrapped toolbar, so a `right-0` popover hangs off the
+   * left edge of the screen (measured at x = -98 in a 390 px viewport). Clamping
+   * a measured anchor keeps it on screen at any width, including the phone's
+   * collapsed toolbar.
+   */
+  const vesselPickerRef = useRef<HTMLButtonElement | null>(null);
+  const vesselPickerWrapRef = useRef<HTMLDivElement | null>(null);
+  const [vesselMenuPos, setVesselMenuPos] = useState<{ left: number; top: number } | null>(
+    null
+  );
+  /**
+   * The window the routes are drawn for. `null` means the whole recording.
+   * The collector keeps 24 hours, so this can never ask for more than that —
+   * `VESSEL_DATA_SPAN` bounds the picker to what was actually recorded.
+   */
+  const [vesselWindow, setVesselWindow] = useState<{ from: number; to: number } | null>(null);
+  /**
    * Measured intake, keyed by station code, from `/api/station-data`. Only the
    * stations that report weighbridge data appear here; the rest simply have no
    * entry, and the drawer omits the section.
@@ -527,6 +557,39 @@ export default function HomePage() {
   }, [showVesselRoutes]);
 
   /**
+   * Pick a vessel in or out. Switching the last one off also switches the route
+   * off: leaving it on would keep a control lit that can only ever draw
+   * nothing, which reads as broken.
+   */
+  const toggleVessel = useCallback(
+    (mmsi: string) => {
+      const next = visibleVessels.includes(mmsi)
+        ? visibleVessels.filter((m) => m !== mmsi)
+        : [...visibleVessels, mmsi];
+      setVisibleVessels(next);
+      if (next.length === 0) setShowVesselRoutes(false);
+    },
+    [visibleVessels]
+  );
+
+  /**
+   * Set the route window. Clamped to the recorded span and to the retention
+   * period, and dropped back to `null` (the whole recording) when the user
+   * selects everything — so "All" and "the default" stay the same state rather
+   * than two windows that happen to look alike.
+   */
+  const setVesselWindowRange = useCallback((from: number, to: number) => {
+    const span = VESSEL_DATA_SPAN;
+    if (!span) return;
+    const floor = Math.max(span.from, Date.now() - VESSEL_RETENTION_MS);
+    const start = Math.min(Math.max(from, floor), span.to);
+    const end = Math.min(Math.max(to, floor), span.to);
+    if (end <= start) return;
+    const isEverything = start <= span.from + 60_000 && end >= span.to - 60_000;
+    setVesselWindow(isEverything ? null : { from: start, to: end });
+  }, []);
+
+  /**
    * Bottom-dock tabs (phones only).
    *
    * Below lg the three panels are mutually exclusive: they are sheets stacked
@@ -595,7 +658,35 @@ export default function HomePage() {
   }, []);
 
   /**
-   * The display toolbar: font scale, map style, language, reset view.
+   * Close the vessel picker on an outside click or Escape.
+   *
+   * A full-screen backdrop button would be the obvious way to do this, but the
+   * picker lives inside the header card, which has `backdrop-blur` — and that
+   * makes the card a containing block *and* a stacking context. A `fixed
+   * inset-0` backdrop there covers only the card, and paints under the bottom
+   * dock on a phone. A document listener has neither problem.
+   */
+  useEffect(() => {
+    if (!vesselMenuOpen) return;
+    const onPointerDown = (e: PointerEvent) => {
+      const wrap = vesselPickerWrapRef.current;
+      // The popover is inside the wrapper, so clicks on a row do not close it.
+      if (wrap && e.target instanceof Node && wrap.contains(e.target)) return;
+      setVesselMenuOpen(false);
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setVesselMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [vesselMenuOpen]);
+
+  /**
+   * The display toolbar: font scale, vessels, map style, language, reset view.
    *
    * Rendered in two places — inside the header card on phones, and as its own
    * row beside the header from md up — but only one of the two is ever visible
@@ -629,6 +720,126 @@ export default function HomePage() {
         >
           A+
         </button>
+      </div>
+
+      {/* Vessels — beside the font control because it is the same kind of
+          switch: what am I looking at. Nothing is drawn until one is picked,
+          so the map opens as a map of facilities. */}
+      <div className="relative" ref={vesselPickerWrapRef}>
+        <button
+          ref={vesselPickerRef}
+          onClick={() => {
+            if (vesselMenuOpen) {
+              setVesselMenuOpen(false);
+              return;
+            }
+            const r = vesselPickerRef.current?.getBoundingClientRect();
+            const wrap = vesselPickerWrapRef.current?.getBoundingClientRect();
+            const width = 248;
+            if (r && wrap) {
+              // Right-align to the button, then clamp into the viewport, then
+              // express the result relative to the wrapper — the popover is
+              // absolutely positioned, so viewport coordinates would be wrong.
+              const viewportLeft = Math.min(
+                Math.max(8, r.right - width),
+                Math.max(8, window.innerWidth - width - 8)
+              );
+              setVesselMenuPos({
+                left: viewportLeft - wrap.left,
+                top: r.bottom - wrap.top + 6,
+              });
+            }
+            setVesselMenuOpen(true);
+          }}
+          aria-expanded={vesselMenuOpen}
+          aria-haspopup="true"
+          aria-label={lang === "zh" ? "選擇船隻" : "Select vessels"}
+          title={
+            VESSEL_TRACKS.length === 0
+              ? lang === "zh"
+                ? "尚未記錄船隻航跡 — 請在船隻航行時執行 npm run ais:collect"
+                : "No vessel track recorded yet — run `npm run ais:collect` while a vessel is sailing."
+              : undefined
+          }
+          disabled={VESSEL_TRACKS.length === 0}
+          className={cn(
+            "flex items-center gap-1 rounded-full border px-2 py-1.5 shadow-lg backdrop-blur-xl transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60",
+            visibleVessels.length > 0
+              ? "border-sky-400/40 bg-sky-500/15 text-white hover:bg-sky-500/25"
+              : "border-white/12 bg-slate-900/85 text-white/70 hover:bg-white/10 hover:text-white",
+            VESSEL_TRACKS.length === 0 && "cursor-not-allowed opacity-40"
+          )}
+        >
+          <Ship className="h-3.5 w-3.5" />
+          <span className="text-[length:calc(11px*var(--fs))] font-semibold tabular-nums leading-none">
+            {visibleVessels.length || "—"}
+          </span>
+          <ChevronDown
+            className={cn(
+              "h-3 w-3 opacity-60 transition-transform",
+              vesselMenuOpen && "rotate-180"
+            )}
+          />
+        </button>
+
+        {vesselMenuOpen && (
+          <div
+            className="pointer-events-auto absolute z-50 w-[15.5rem] rounded-xl border border-white/12 bg-slate-900/95 p-1.5 shadow-2xl backdrop-blur-xl"
+            style={{
+              left: vesselMenuPos?.left ?? 0,
+              top: vesselMenuPos?.top ?? 34,
+            }}
+          >
+              <p className="px-2 pb-1 pt-0.5 text-[length:calc(9.5px*var(--fs))] font-semibold uppercase tracking-wider text-white/40">
+                {lang === "zh" ? "船隻" : "Vessels"}
+              </p>
+              {VESSEL_TRACKS.map((track) => {
+                const on = visibleVessels.includes(track.mmsi);
+                return (
+                  <button
+                    key={track.mmsi}
+                    onClick={() => toggleVessel(track.mmsi)}
+                    aria-pressed={on}
+                    className={cn(
+                      "flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60",
+                      on ? "bg-white/8 hover:bg-white/12" : "opacity-55 hover:opacity-90"
+                    )}
+                  >
+                    <span
+                      className="h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-white/20"
+                      style={{ backgroundColor: vesselColor(track.mmsi).hex }}
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[length:calc(11.5px*var(--fs))] font-medium text-white/90">
+                        {track.name}
+                      </span>
+                      <span className="block truncate text-[length:calc(9.5px*var(--fs))] tabular-nums text-white/40">
+                        MMSI {track.mmsi} · {track.points.length}{" "}
+                        {lang === "zh" ? "個匯報" : "reports"}
+                      </span>
+                    </span>
+                    <Check
+                      className={cn(
+                        "h-3.5 w-3.5 shrink-0 text-emerald-400 transition-opacity",
+                        on ? "opacity-100" : "opacity-0"
+                      )}
+                    />
+                  </button>
+                );
+              })}
+              {visibleVessels.length > 0 && (
+                <button
+                  onClick={() => {
+                    setVisibleVessels([]);
+                    setShowVesselRoutes(false);
+                  }}
+                  className="mt-1 w-full rounded-lg border-t border-white/10 px-2 py-1.5 text-left text-[length:calc(10px*var(--fs))] text-white/50 transition-colors hover:text-white/80"
+                >
+                  {lang === "zh" ? "全部隱藏" : "Hide all"}
+                </button>
+              )}
+          </div>
+        )}
       </div>
 
       <Segmented<MapStyleId>
@@ -670,6 +881,152 @@ export default function HomePage() {
       </button>
     </>
   );
+
+  /**
+   * The time search, shown under the route toggle once the route is on.
+   *
+   * Takes the span as an argument rather than reading `VESSEL_DATA_SPAN` itself
+   * so the null case is handled once, at the call site, instead of being
+   * re-checked inside every change handler.
+   *
+   * The window is the same state for every selected vessel: "show me 20:00 to
+   * 22:00" is a question about the sea, not about one ship.
+   */
+  const renderVesselTimeSearch = (span: { from: number; to: number }) => {
+    const current = vesselWindow ?? span;
+    const preset = (hours: number | null) => {
+      if (hours === null) {
+        setVesselWindow(null);
+        return;
+      }
+      // Anchored on the newest record, not on `Date.now()`: the ships may not
+      // have reported for hours, and "last 1 h" would otherwise land on an
+      // empty stretch of water.
+      setVesselWindowRange(span.to - hours * 60 * 60 * 1000, span.to);
+    };
+    const presets: { label: string; hours: number | null }[] = [
+      { label: "1h", hours: 1 },
+      { label: "6h", hours: 6 },
+      { label: "24h", hours: 24 },
+      { label: lang === "zh" ? "全部" : "All", hours: null },
+    ];
+    const field =
+      "w-full rounded-md border border-white/12 bg-slate-950/60 px-1.5 py-1 text-[length:calc(10px*var(--fs))] tabular-nums text-white/80 outline-none focus:border-emerald-400/60 [color-scheme:dark]";
+
+    // Say what is actually on file. "24 h retained" would be the collector's
+    // policy, but a picker bounded to 65 minutes under a 24-hour label looks
+    // broken — the number that matters is how much was recorded.
+    const spanMinutes = Math.round((span.to - span.from) / 60000);
+    const spanLabel =
+      spanMinutes >= 23 * 60
+        ? lang === "zh"
+          ? "保留 24 小時"
+          : "24 h retained"
+        : spanMinutes >= 60
+          ? lang === "zh"
+            ? `已記錄 ${Math.round(spanMinutes / 60)} 小時`
+            : `${Math.round(spanMinutes / 60)} h recorded`
+          : lang === "zh"
+            ? `已記錄 ${spanMinutes} 分鐘`
+            : `${spanMinutes} min recorded`;
+
+    return (
+      <div
+        data-testid="vessel-time-search"
+        className="mt-1 rounded-lg border border-white/10 bg-white/[0.03] px-2 py-2"
+      >
+        <div className="flex items-baseline justify-between gap-2">
+          <span className="text-[length:calc(9.5px*var(--fs))] font-semibold uppercase tracking-wider text-white/50">
+            {lang === "zh" ? "時間範圍" : "Time range"}
+          </span>
+          <span className="text-[length:calc(9px*var(--fs))] text-white/30">
+            {spanLabel}
+          </span>
+        </div>
+
+        <div className="mt-1.5 grid grid-cols-2 gap-1">
+          <label className="min-w-0">
+            <span className="mb-0.5 block text-[length:calc(9px*var(--fs))] text-white/40">
+              {lang === "zh" ? "由" : "From"}
+            </span>
+            <input
+              type="datetime-local"
+              className={field}
+              value={toDateTimeLocalValue(current.from)}
+              min={toDateTimeLocalValue(span.from)}
+              max={toDateTimeLocalValue(span.to)}
+              onChange={(e) => {
+                const ms = fromDateTimeLocalValue(e.target.value);
+                if (ms !== null) setVesselWindowRange(ms, current.to);
+              }}
+            />
+          </label>
+          <label className="min-w-0">
+            <span className="mb-0.5 block text-[length:calc(9px*var(--fs))] text-white/40">
+              {lang === "zh" ? "至" : "To"}
+            </span>
+            <input
+              type="datetime-local"
+              className={field}
+              value={toDateTimeLocalValue(current.to)}
+              min={toDateTimeLocalValue(span.from)}
+              max={toDateTimeLocalValue(span.to)}
+              onChange={(e) => {
+                const ms = fromDateTimeLocalValue(e.target.value);
+                if (ms !== null) setVesselWindowRange(current.from, ms);
+              }}
+            />
+          </label>
+        </div>
+
+        <div className="mt-1.5 flex flex-wrap gap-1">
+          {presets.map((p) => {
+            const on =
+              p.hours === null
+                ? vesselWindow === null
+                : vesselWindow !== null &&
+                  Math.abs(vesselWindow.to - span.to) < 60_000 &&
+                  Math.abs(vesselWindow.from - (span.to - p.hours * 60 * 60 * 1000)) <
+                    60_000;
+            return (
+              <button
+                key={p.label}
+                onClick={() => preset(p.hours)}
+                aria-pressed={on}
+                className={cn(
+                  "rounded-md border px-1.5 py-0.5 text-[length:calc(9.5px*var(--fs))] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60",
+                  on
+                    ? "border-emerald-400/50 bg-emerald-400/15 text-emerald-200"
+                    : "border-white/12 text-white/50 hover:border-white/25 hover:text-white/80"
+                )}
+              >
+                {p.label}
+              </button>
+            );
+          })}
+        </div>
+
+        <p className="mt-1.5 text-[length:calc(9px*var(--fs))] leading-relaxed text-white/35">
+          {lang === "zh"
+            ? `${formatLocalTime(current.from)} 至 ${formatLocalTime(current.to)}`
+            : `${formatLocalTime(current.from)} → ${formatLocalTime(current.to)}`}
+        </p>
+      </div>
+    );
+  };
+
+  /** The recorded span, or null when nothing has been collected yet. */
+  const vesselSpan = VESSEL_DATA_SPAN;
+
+  /**
+   * AIS reports behind the routes actually on screen. Shown in the legend when
+   * the route is on: a vessel reports roughly once a minute, so a handful of
+   * reports is why the drawn route is a few long straight legs rather than a
+   * smooth sailed course. Better to say so than to let it read as a bug.
+   */
+  const selectedReportCount = VESSEL_TRACKS.filter((track) =>
+    visibleVessels.includes(track.mmsi)
+  ).reduce((total, track) => total + track.points.length, 0);
 
   // Read the id out before any narrowing applies. `drawerOpen` is a const
   // derived from `selected`, so TypeScript narrows `selected` to null inside
@@ -716,6 +1073,8 @@ export default function HomePage() {
           lang={lang}
           visibleCategories={visibleCategories}
           showVesselRoutes={showVesselRoutes}
+          visibleVessels={visibleVessels}
+          vesselWindow={vesselWindow}
           emptyHint={!loading && visibleFacilities.length === 0}
           onUserMapInteract={handleUserMapInteract}
         />
@@ -1115,24 +1474,25 @@ export default function HomePage() {
                 <div className="space-y-1 border-t border-white/10 px-2 py-2">
                   {/* Last sailing route. Deliberately NOT a category checkbox:
                       it is a different kind of layer, so it sits above the
-                      facility categories rather than beside them. The vessel
-                      markers themselves are always drawn whenever a track
-                      exists — this switch only adds the route, its wake and
-                      the playback on top. Disabled until a vessel has actually
-                      sailed while the collector ran: there is nothing honest
-                      to draw from a stationary ship. */}
+                      facility categories rather than beside them. It draws the
+                      route for whichever vessels the picker has switched on, so
+                      it is disabled — not merely empty — until one is picked. */}
                   <button
                     onClick={toggleVessels}
                     aria-pressed={showVesselRoutes}
-                    disabled={VESSEL_TRACKS.length === 0}
+                    disabled={visibleVessels.length === 0}
                     title={
                       VESSEL_TRACKS.length === 0
                         ? "No recorded vessel route yet — run `npm run ais:collect` while a vessel is sailing."
-                        : undefined
+                        : visibleVessels.length === 0
+                          ? lang === "zh"
+                            ? "先在船隻選單中選擇船隻"
+                            : "Pick a vessel first"
+                          : undefined
                     }
                     className={cn(
                       "flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60",
-                      VESSEL_TRACKS.length === 0
+                      visibleVessels.length === 0
                         ? "cursor-not-allowed opacity-40"
                         : showVesselRoutes
                           ? "hover:bg-white/8"
@@ -1147,9 +1507,11 @@ export default function HomePage() {
                       {lang === "zh" ? "上次航行航線 (AIS)" : "Last sailing route (AIS)"}
                     </span>
                     <span className="text-[length:calc(10px*var(--fs))] tabular-nums text-white/40">
-                      {VESSEL_TRACKS.length}
+                      {visibleVessels.length || "—"}
                     </span>
                   </button>
+
+                  {showVesselRoutes && vesselSpan && renderVesselTimeSearch(vesselSpan)}
 
                   {CATEGORY_ORDER.map((category) => {
                     const meta = CATEGORY_META[category];
@@ -1192,18 +1554,25 @@ export default function HomePage() {
                   <div className="mt-1 space-y-0.5 border-t border-white/10 px-2 pb-1 pt-2 text-[length:calc(9.5px*var(--fs))] leading-relaxed text-white/40">
                     <p>{t("heightByThroughput", lang)}</p>
                     <p>{t("colourByCategory", lang)}</p>
-                    {VESSEL_TRACKS.length > 0 && (
+                    {VESSEL_TRACKS.length > 0 && visibleVessels.length === 0 && (
                       <p>
                         {lang === "zh"
-                          ? "船隻標記顯示其最後記錄的 AIS 位置；開啟航線可重播該次航行的路徑。"
-                          : "Vessel markers show the last recorded AIS position; switch on the route to replay the trip it sailed."}
+                          ? "船隻預設隱藏。從上方船隻選單選擇船隻後，地圖會顯示其最後記錄的 AIS 位置。"
+                          : "Vessels are hidden by default. Pick one from the vessel menu above to see its last recorded AIS position."}
                       </p>
                     )}
                     {showVesselRoutes && (
                       <p>
                         {lang === "zh"
-                          ? `航線由 ${VESSEL_REPORT_COUNT} 個 AIS 位置匯報連接而成。船隻約每分鐘匯報一次，因此兩點之間是直線段，並非實測航道。`
-                          : `The route joins ${VESSEL_REPORT_COUNT} AIS reports. A vessel reports about once a minute, so the legs between them are straight lines, not a surveyed channel.`}
+                          ? "航線上每 10 分鐘一個點；將滑鼠移到點上可查看該時刻的時間、位置與航速。"
+                          : "A dot every 10 minutes along the route — hover one for its time, position and speed."}
+                      </p>
+                    )}
+                    {showVesselRoutes && (
+                      <p>
+                        {lang === "zh"
+                          ? `航線由 ${selectedReportCount} 個 AIS 位置匯報連接而成。船隻約每分鐘匯報一次，因此兩點之間是直線段，並非實測航道。`
+                          : `The route joins ${selectedReportCount} AIS reports. A vessel reports about once a minute, so the legs between them are straight lines, not a surveyed channel.`}
                       </p>
                     )}
                   </div>

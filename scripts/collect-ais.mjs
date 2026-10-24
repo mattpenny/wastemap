@@ -17,6 +17,7 @@
  * USAGE
  *   npm run ais:collect              # collect until Ctrl-C
  *   npm run ais:collect -- --minutes 90
+ *   npm run ais:collect -- --retain-hours 24   # history to keep (default 24)
  *   npm run ais:collect -- --status  # just print what is on file
  *
  * Requires AISSTREAM_API_KEY in `.env` (gitignored; never committed).
@@ -52,6 +53,18 @@ const MIN_MOVE_M = 5;
 /** Ignore reports older than this (a stale replay is not a real sighting). */
 const MAX_AGE_MS = 10 * 60 * 1000;
 
+/**
+ * How much history the file keeps. The map's time search offers a window inside
+ * this, so the two have to agree — `VESSEL_RETENTION_MS` in
+ * `src/lib/vesselTracks.ts` is the same number, and it is what the picker uses
+ * to refuse a window the data cannot cover.
+ *
+ * Pruning happens on save, not on load, so a collection run never silently
+ * throws away the file it just read. A day of two moored barges is only a few
+ * dozen points, but an unattended run would otherwise grow without bound.
+ */
+const DEFAULT_RETAIN_HOURS = 24;
+
 function readKey() {
   const envPath = path.join(ROOT, ".env");
   if (!fs.existsSync(envPath)) {
@@ -76,12 +89,24 @@ function loadTracks() {
   }
 }
 
-function saveTracks(data) {
+function saveTracks(data, retainHours = DEFAULT_RETAIN_HOURS) {
   data.generatedAt = new Date().toISOString();
   const tmp = OUT + ".tmp";
   fs.mkdirSync(path.dirname(OUT), { recursive: true });
   fs.writeFileSync(tmp, JSON.stringify(data));
   fs.renameSync(tmp, OUT); // atomic: never leaves a half-written file
+}
+
+/** Drop points older than the retention window. Returns how many went. */
+function pruneOld(data, retainHours) {
+  const cutoff = Date.now() - retainHours * 60 * 60 * 1000;
+  let dropped = 0;
+  for (const v of data.vessels) {
+    const before = v.points.length;
+    v.points = v.points.filter((p) => p.t >= cutoff);
+    dropped += before - v.points.length;
+  }
+  return dropped;
 }
 
 function distM(a, b) {
@@ -108,7 +133,7 @@ function ensureVessel(data, v) {
   return rec;
 }
 
-async function collect({ minutes }) {
+async function collect({ minutes, retainHours }) {
   const API_KEY = readKey();
   const data = loadTracks();
   const targets = new Map(VESSELS.map((v) => [v.mmsi, v]));
@@ -120,11 +145,15 @@ async function collect({ minutes }) {
 
   const stop = () => {
     try { socket.close(); } catch {}
-    saveTracks(data);
+    const pruned = pruneOld(data, retainHours);
+    saveTracks(data, retainHours);
     const summary = data.vessels
       .map((v) => `  ${v.name} (${v.mmsi}): ${v.points.length} points`)
       .join("\n");
-    console.log(`\nStopped. ${added} points added, ${dropped} ignored.`);
+    console.log(
+      `\nStopped. ${added} points added, ${dropped} ignored, ${pruned} pruned ` +
+        `(older than ${retainHours}h).`
+    );
     console.log(`Track file: ${path.relative(ROOT, OUT)}`);
     if (summary) console.log(summary);
     process.exit(0);
@@ -227,5 +256,9 @@ const args = process.argv.slice(2);
 if (args.includes("--status")) status();
 else {
   const mi = args.indexOf("--minutes");
-  collect({ minutes: mi >= 0 ? Number(args[mi + 1]) : null });
+  const ri = args.indexOf("--retain-hours");
+  collect({
+    minutes: mi >= 0 ? Number(args[mi + 1]) : null,
+    retainHours: ri >= 0 ? Number(args[ri + 1]) : DEFAULT_RETAIN_HOURS,
+  });
 }
