@@ -13,6 +13,10 @@ The short version of the current interaction: **pick a ship in the toolbar switc
 click it on the map.** That opens a card with that vessel's route and its time search.
 There is no route switch in the legend any more (§12.3).
 
+The data itself — every recorded report, as tables — is in **`vessel-records.md`**, with
+a machine-readable `data/vessel-records.csv` beside it. This document is about the code;
+that one is about what the ships actually transmitted.
+
 ---
 
 ## 1. The vessels
