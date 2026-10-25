@@ -749,6 +749,72 @@ export default function HomePage() {
   }, [vesselMenuOpen]);
 
   /**
+   * The vessel picker.
+   *
+   * Two shapes, because the toolbar lives in two different places. From md up
+   * it floats under the button it belongs to. On a phone it renders inline and
+   * the header card grows to hold it: a 16rem panel anchored to a button that
+   * sits near the left edge of a narrow card runs straight off the screen,
+   * which is what the floating version used to do on mobile.
+   */
+  const renderVesselPicker = (floating: boolean) => (
+    <div
+      role="dialog"
+      aria-label={t("vessels", lang)}
+      data-testid="vessel-menu"
+      data-vessel-menu
+      className={cn(
+        "overflow-hidden rounded-xl border border-white/12 bg-slate-900/95 shadow-2xl backdrop-blur-xl",
+        floating ? "absolute right-0 top-full z-50 mt-2 w-64" : "mt-2 w-full"
+      )}
+    >
+      <div className="flex items-center justify-between gap-2 border-b border-white/10 px-3 py-2">
+        <span className="text-[length:calc(10px*var(--fs))] font-semibold uppercase tracking-wider text-white/50">
+          {t("vessels", lang)}
+        </span>
+        <button
+          onClick={toggleAllVessels}
+          className="text-[length:calc(10px*var(--fs))] font-semibold text-emerald-300/90 transition-colors hover:text-emerald-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60"
+        >
+          {visibleVessels.length === VESSEL_TRACKS.length
+            ? t("vesselsNone", lang)
+            : t("vesselsShowAll", lang)}
+        </button>
+      </div>
+      <div className="p-1">
+        {VESSEL_TRACKS.map((track) => {
+          const on = visibleVessels.includes(track.mmsi);
+          return (
+            <button
+              key={track.mmsi}
+              onClick={() => toggleVessel(track.mmsi)}
+              aria-pressed={on}
+              className={cn(
+                "flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60",
+                on ? "hover:bg-white/8" : "opacity-45 hover:opacity-70"
+              )}
+            >
+              <span
+                className="h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-white/25"
+                style={{ backgroundColor: vesselColor(track.mmsi).hex }}
+              />
+              <span className="flex-1 truncate text-[length:calc(11.5px*var(--fs))] font-medium text-white/85">
+                {track.name}
+              </span>
+              <span className="text-[length:calc(10px*var(--fs))] tabular-nums text-white/40">
+                {track.points.length}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <p className="border-t border-white/10 px-3 py-2 text-[length:calc(9.5px*var(--fs))] leading-relaxed text-white/40">
+        {t("vesselsHint", lang)}
+      </p>
+    </div>
+  );
+
+  /**
    * The display toolbar: font scale, vessel switch, map style, language,
    * reset view.
    *
@@ -756,8 +822,11 @@ export default function HomePage() {
    * row beside the header from md up — but only one of the two is ever visible
    * (`md:hidden` / `hidden md:flex`), so this stays a single definition rather
    * than two copies that can drift apart.
+   *
+   * `floatingPicker` is false for the phone copy: there the picker is rendered
+   * inline by the header instead of floating out of the button.
    */
-  const renderControls = () => (
+  const renderControls = (floatingPicker: boolean) => (
     <>
       {/* Font size — leftmost, so it reads as a display setting that applies to
           everything to its right. */}
@@ -810,58 +879,7 @@ export default function HomePage() {
           <span className="tabular-nums opacity-70">{visibleVessels.length}</span>
         </button>
 
-        {vesselMenuOpen && (
-          <div
-            role="dialog"
-            aria-label={t("vessels", lang)}
-            data-testid="vessel-menu"
-            className="absolute right-0 top-full z-50 mt-2 w-64 overflow-hidden rounded-xl border border-white/12 bg-slate-900/95 shadow-2xl backdrop-blur-xl"
-          >
-            <div className="flex items-center justify-between gap-2 border-b border-white/10 px-3 py-2">
-              <span className="text-[length:calc(10px*var(--fs))] font-semibold uppercase tracking-wider text-white/50">
-                {t("vessels", lang)}
-              </span>
-              <button
-                onClick={toggleAllVessels}
-                className="text-[length:calc(10px*var(--fs))] font-semibold text-emerald-300/90 transition-colors hover:text-emerald-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60"
-              >
-                {visibleVessels.length === VESSEL_TRACKS.length
-                  ? t("vesselsNone", lang)
-                  : t("vesselsShowAll", lang)}
-              </button>
-            </div>
-            <div className="p-1">
-              {VESSEL_TRACKS.map((track) => {
-                const on = visibleVessels.includes(track.mmsi);
-                return (
-                  <button
-                    key={track.mmsi}
-                    onClick={() => toggleVessel(track.mmsi)}
-                    aria-pressed={on}
-                    className={cn(
-                      "flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60",
-                      on ? "hover:bg-white/8" : "opacity-45 hover:opacity-70"
-                    )}
-                  >
-                    <span
-                      className="h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-white/25"
-                      style={{ backgroundColor: vesselColor(track.mmsi).hex }}
-                    />
-                    <span className="flex-1 truncate text-[length:calc(11.5px*var(--fs))] font-medium text-white/85">
-                      {track.name}
-                    </span>
-                    <span className="text-[length:calc(10px*var(--fs))] tabular-nums text-white/40">
-                      {track.points.length}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-            <p className="border-t border-white/10 px-3 py-2 text-[length:calc(9.5px*var(--fs))] leading-relaxed text-white/40">
-              {t("vesselsHint", lang)}
-            </p>
-          </div>
-        )}
+        {vesselMenuOpen && floatingPicker && renderVesselPicker(true)}
       </div>
 
       <Segmented<MapStyleId>
@@ -1020,7 +1038,10 @@ export default function HomePage() {
                     data-testid="display-toolbar-phone"
                     className="mt-2 flex flex-wrap items-center gap-1.5 border-t border-white/10 pt-2 md:hidden"
                   >
-                    {renderControls()}
+                    {renderControls(false)}
+                    {/* Inline, not floating: the card grows to fit the picker
+                        rather than letting it hang off the screen edge. */}
+                    {vesselMenuOpen && renderVesselPicker(false)}
                   </div>
                 )}
 
@@ -1043,7 +1064,7 @@ export default function HomePage() {
               data-testid="display-toolbar"
               className="pointer-events-auto hidden flex-wrap items-center gap-1.5 sm:gap-2 md:flex"
             >
-              {renderControls()}
+              {renderControls(true)}
             </div>
           </div>
 
@@ -1393,10 +1414,13 @@ export default function HomePage() {
                   </button>
 
                   {/* Time search. Only worth showing once a route is drawn:
-                      narrowing a window with nothing in it is a dead control. */}
+                      narrowing a window with nothing in it is a dead control.
+                      Laid out inline — label beside field — because two
+                      half-width fields leave most of each row empty and make
+                      the card far taller than the two timestamps it holds. */}
                   {showVesselRoutes && activeWindow && (
-                    <div className="px-2 pb-1.5 pt-1">
-                      <div className="flex items-center gap-1.5 pb-1.5">
+                    <div className="px-2 pb-1.5 pt-0.5">
+                      <div className="flex items-center gap-1.5 pb-1">
                         <Clock className="h-3 w-3 shrink-0 text-white/35" />
                         <span className="text-[length:calc(10px*var(--fs))] font-semibold uppercase tracking-wider text-white/45">
                           {t("timeSearch", lang)}
@@ -1408,15 +1432,15 @@ export default function HomePage() {
                           {t("timeReset", lang)}
                         </button>
                       </div>
-                      <div className="grid grid-cols-2 gap-1.5">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                         {(
                           [
                             ["from", t("timeFrom", lang), activeWindow.from],
                             ["to", t("timeTo", lang), activeWindow.to],
                           ] as const
                         ).map(([which, label, value]) => (
-                          <label key={which} className="block">
-                            <span className="mb-0.5 block text-[length:calc(9.5px*var(--fs))] text-white/40">
+                          <label key={which} className="flex items-center gap-1">
+                            <span className="text-[length:calc(9.5px*var(--fs))] text-white/40">
                               {label}
                             </span>
                             <input
@@ -1431,7 +1455,7 @@ export default function HomePage() {
                                 const ms = fromLocalInput(e.target.value);
                                 if (ms !== null) setWindowBound(which, ms);
                               }}
-                              className="w-full rounded-md border border-white/12 bg-slate-800/70 px-1.5 py-1 text-[length:calc(10px*var(--fs))] tabular-nums text-white/85 [color-scheme:dark] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60"
+                              className="w-[8.6rem] rounded-md border border-white/12 bg-slate-800/70 px-1.5 py-0.5 text-[length:calc(10px*var(--fs))] tabular-nums text-white/85 [color-scheme:dark] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60"
                             />
                           </label>
                         ))}
@@ -1483,8 +1507,7 @@ export default function HomePage() {
                   })}
 
                   <div className="mt-1 space-y-0.5 border-t border-white/10 px-2 pb-1 pt-2 text-[length:calc(9.5px*var(--fs))] leading-relaxed text-white/40">
-                    <p>{t("heightByThroughput", lang)}</p>
-                    <p>{t("colourByCategory", lang)}</p>
+                    <p>{t("legendPillarNote", lang)}</p>
                     {VESSEL_TRACKS.length > 0 && visibleVessels.length === 0 && (
                       <p>
                         {lang === "zh"

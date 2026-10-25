@@ -112,6 +112,15 @@ const DICT = {
   hideLegend: ["Hide legend", "隱藏圖例"],
   heightByThroughput: ["Pillar height = published throughput; short marker = no site figure", "柱高＝已公布處理量；短柱＝未公布各站數據"],
   colourByCategory: ["Pillar colour = each facility", "柱色＝各設施"],
+  /**
+   * The two lines above, run together. The legend is a panel over the map, so
+   * every line of prose it carries costs map: one sentence doing the work of
+   * two keeps the same information in half the height.
+   */
+  legendPillarNote: [
+    "Pillar height = published throughput (short marker = no site figure); colour = each facility",
+    "柱高＝已公布處理量（短柱＝未公布各站數據）；柱色＝各設施",
+  ],
   clickHint: ["Click a pillar for facility detail", "點擊柱狀標記查看設施詳情"],
   resetView: ["Reset view", "重設視角"],
   designCapacity: ["Design capacity", "設計處理量"],

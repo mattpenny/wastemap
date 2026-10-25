@@ -28,6 +28,7 @@ import {
   trailBefore,
   vesselColor,
   type VesselTimeMark,
+  type VesselTrack,
 } from "@/lib/vesselTracks";
 import { formatNumber } from "@/lib/utils";
 import {
@@ -166,15 +167,23 @@ const PIN_ICON_SIZE = { width: 64, height: 80, anchorX: 32, anchorY: 80 };
 
 /**
  * Top-down vessel silhouette, pointing north (course 0). The layer rotates it
- * to the vessel's real course over ground, so it always noses the way it is
- * actually heading. Built as an inline SVG data URI for the same reason as the
- * pin: no network request, no sprite atlas.
+ * to the vessel's heading, so it always noses the way it is actually going.
+ * Built as an inline SVG data URI for the same reason as the pin: no network
+ * request, no sprite atlas.
+ *
+ * Shaped like the ships it stands for: a sharp bow, parallel sides, a flat
+ * transom — long and narrow, the way a harbour work boat reads from above. The
+ * previous outline had a rounded stern that bulged almost as wide as the bow,
+ * so at marker size it read as a blob and you could not tell which end was
+ * which. Symmetric about y=32 on purpose: that is the rotation anchor, and an
+ * off-centre hull visibly swings as the course changes.
  */
 function vesselIconUri(hex: string): string {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
-<path d="M32 4 C40 20 42 32 42 42 L42 50 Q32 57 22 50 L22 42 C22 32 24 20 32 4 Z"
+<path d="M32 6 C37 16 40 25 40 33 L40 58 L24 58 L24 33 C24 25 27 16 32 6 Z"
  fill="${hex}" stroke="#ffffff" stroke-width="3" stroke-linejoin="round"/>
-<path d="M32 13 L32 44" stroke="#ffffff" stroke-width="2" stroke-opacity="0.5"/>
+<path d="M32 14 L32 52" stroke="#ffffff" stroke-width="2" stroke-opacity="0.45"/>
+<path d="M26 42 L38 42" stroke="#ffffff" stroke-width="2" stroke-opacity="0.3"/>
 </svg>`;
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
@@ -203,6 +212,52 @@ function formatVesselTime(ms: number): string {
   const d = new Date(ms);
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${pad(d.getDate())}/${pad(d.getMonth() + 1)} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** Initial bearing from one coordinate to another, degrees clockwise from north. */
+function bearingDeg(from: [number, number], to: [number, number]): number {
+  const rad = Math.PI / 180;
+  const [lon1, lat1] = from;
+  const [lon2, lat2] = to;
+  const y = Math.sin((lon2 - lon1) * rad) * Math.cos(lat2 * rad);
+  const x =
+    Math.cos(lat1 * rad) * Math.sin(lat2 * rad) -
+    Math.sin(lat1 * rad) * Math.cos(lat2 * rad) * Math.cos((lon2 - lon1) * rad);
+  return (Math.atan2(y, x) / rad + 360) % 360;
+}
+
+/**
+ * Speed below which a reported course over ground is not trusted, in knots.
+ *
+ * AIS derives COG from successive fixes, so at walking pace it is dominated by
+ * GPS noise and often just repeats the last value. In this recording NGON
+ * SHUEN II sat at 0.0 kn reporting 195° while the track it had just sailed ran
+ * 328° — a 133° error that left the hull pointing backwards down its own wake.
+ * One knot is the usual "is it actually moving" line for a harbour craft.
+ */
+const VESSEL_COG_MIN_KN = 1;
+
+/**
+ * Which way the hull points, in AIS convention (degrees clockwise from north).
+ *
+ * Below VESSEL_COG_MIN_KN we use the direction between the two reports that
+ * bracket the moment instead, so the hull follows the line it is actually on.
+ * Under way the reported course is the better answer, and that is what is used.
+ */
+function headingFor(
+  track: VesselTrack,
+  course: number | null,
+  sog: number | null,
+  fromT: number,
+  toT: number
+): number {
+  if (sog != null && sog >= VESSEL_COG_MIN_KN && course != null) return course;
+  const a = track.points.find((p) => p.t === fromT);
+  const b = track.points.find((p) => p.t === toT);
+  if (a && b && (a.lng !== b.lng || a.lat !== b.lat)) {
+    return bearingDeg([a.lng, a.lat], [b.lng, b.lat]);
+  }
+  return course ?? 0;
 }
 
 
@@ -373,6 +428,17 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
    * single site — at zoom 13.4 a 2.5 km column is absurd.
    */
   const [zoom, setZoom] = useState(HK_ZOOM);
+  /**
+   * Current map bearing, in degrees.
+   *
+   * The vessel icons are `billboard`, so they rotate in SCREEN space — measured:
+   * at map bearing -18 the hull was drawn 18 deg off, exactly the bearing. A
+   * north-up frame hides this, which is why the route view looked right and the
+   * landing view (rotated -18) did not. The layer therefore has to subtract the
+   * bearing from each course itself, and needs the bearing as a dependency so a
+   * rotation rebuilds the layers.
+   */
+  const [bearing, setBearing] = useState(HK_BEARING);
   const [hovered, setHovered] = useState<
     | { facility: FacilityProperties; x: number; y: number }
     | { vessel: VesselMarker; x: number; y: number }
@@ -670,9 +736,12 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
 
       // The marker. Sitting on the last report by default; riding the
       // interpolated position while the route plays back.
+      const prev = points[points.length - 2];
       const marker: VesselMarker = {
         position: [last.lng, last.lat],
-        course: last.cog,
+        // Heading, not raw COG — see `headingFor`. A ship at 0 kn still
+        // broadcasts an old course, and drawing that leaves it sideways.
+        course: headingFor(track, last.cog, last.sog, prev.t, last.t),
         name: track.name,
         mmsi: track.mmsi,
         t: last.t,
@@ -709,7 +778,7 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
         wake = trailBefore(track, lo + now, VESSEL_TRAIL_MS);
         if (at) {
           marker.position = at.position;
-          marker.course = at.course;
+          marker.course = headingFor(track, at.course, at.sog, at.fromT, at.toT);
           marker.t = lo + now;
           marker.sog = at.sog;
         }
@@ -777,9 +846,12 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
             url: vesselIconFor(color.hex),
             ...VESSEL_ICON_SIZE,
           }),
-          // AIS course is clockwise from north; deck.gl angles are
-          // counter-clockwise, hence the negation.
-          getAngle: (d) => (d.course == null ? 0 : -d.course),
+          // AIS course is clockwise from north and deck.gl angles are
+          // counter-clockwise, hence the negation. The bearing is subtracted
+          // first because a billboard icon rotates in screen space: on a map
+          // rotated by -18 deg, a north-heading hull would otherwise be drawn
+          // 18 deg off true.
+          getAngle: (d) => bearing - (d.course ?? 0),
           loadOptions: { image: { type: "image" } },
           // Hoverable so the vessel can name itself.
           pickable: true,
@@ -796,6 +868,7 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
     landfillScale,
     showVesselRoutes,
     vesselGeometry,
+    bearing,
   ]);
 
   // ------------------------------------------------------------------
@@ -883,6 +956,14 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
       setZoom((prev) => (prev === next ? prev : next));
     };
     map.on("zoom", handleZoom);
+
+    // Whole degrees: the same bail-out trick, so a drag-rotate does not rebuild
+    // the layer set on every frame for a sub-degree change nobody can see.
+    const handleBearing = () => {
+      const next = Math.round(map.getBearing());
+      setBearing((prev) => (prev === next ? prev : next));
+    };
+    map.on("rotate", handleBearing);
 
     // ------------------------------------------------------------------
     // The sea mask (see seaMaskOpacity in mapStyles.ts): flat one-tone sea
