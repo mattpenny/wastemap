@@ -16,6 +16,7 @@ import {
   ChevronDown,
   ChevronUp,
   Clock,
+  Database,
   Layers,
   ListFilter,
   Map as MapIcon,
@@ -23,10 +24,18 @@ import {
   Satellite,
   Ship,
   SlidersHorizontal,
+  X,
 } from "lucide-react";
 
 import type { WasteMap3DHandle, WasteMap3DProps } from "@/components/map/WasteMap3D";
-import { VESSEL_TRACKS, trackSpan, vesselColor } from "@/lib/vesselTracks";
+import {
+  VESSEL_TRACKS,
+  parseTracks,
+  reportCount,
+  trackSpan,
+  vesselColor,
+  type VesselTrack,
+} from "@/lib/vesselTracks";
 import type { MapStyleId } from "@/components/map/mapStyles";
 import { DEFAULT_MAP_STYLE } from "@/components/map/mapStyles";
 import FacilityDetailDrawer from "@/components/ui/FacilityDetailDrawer";
@@ -52,17 +61,6 @@ const FONT_SCALE_DEFAULT = 1.2;
 const FONT_SCALE_MIN = 0.9;
 const FONT_SCALE_MAX = 1.8;
 const FONT_SCALE_STEP = 0.1;
-
-/**
- * Total AIS reports across every recorded track. Shown in the legend when the
- * route is on: a vessel reports roughly once a minute, so a handful of reports
- * is why the drawn route is a few long straight legs rather than a smooth
- * sailed course. Better to say so than to let it read as a rendering bug.
- */
-const VESSEL_REPORT_COUNT = VESSEL_TRACKS.reduce(
-  (total, track) => total + track.points.length,
-  0
-);
 
 /**
  * `datetime-local` wants local wall-clock time with no zone, e.g.
@@ -381,8 +379,29 @@ export default function HomePage() {
    * switch beside the font-size control.
    */
   const [visibleVessels, setVisibleVessels] = useState<string[]>([]);
+  /**
+   * The recording being drawn.
+   *
+   * Starts as the snapshot bundled at build time, then is replaced by whatever
+   * the app's own store has (`GET /api/vessel-tracks`) — the store accumulates
+   * at runtime, so this is how a report collected five minutes ago shows up
+   * without a rebuild. On a static host the store is empty and the response
+   * says so, leaving the bundled snapshot in place; that is a normal outcome,
+   * not a failure.
+   */
+  const [tracks, setTracks] = useState<VesselTrack[]>(VESSEL_TRACKS);
+  /** Where the tracks came from, for the vessel card's status line. */
+  const [tracksSource, setTracksSource] = useState<"bundled" | "store">("bundled");
   /** The vessel picker popover. */
   const [vesselMenuOpen, setVesselMenuOpen] = useState(false);
+  /**
+   * The vessel the user clicked, whose route is drawn and whose card is open.
+   *
+   * Null means every drawn vessel is just a marker. The route and the time
+   * search belong to one vessel at a time: the card narrows one recording, so
+   * drawing a second route it does not control would misrepresent the card.
+   */
+  const [activeVessel, setActiveVessel] = useState<string | null>(null);
   /**
    * The stretch of the recording the route is drawn for, in epoch ms. Null
    * means "the whole recording", which the collector already caps at 24 hours
@@ -392,14 +411,6 @@ export default function HomePage() {
   const [vesselWindow, setVesselWindow] = useState<
     { from: number; to: number } | null
   >(null);
-  /**
-   * Replay the recorded AIS routes. Off by default: the map leads with where
-   * the vessels ARE now (their last recorded position, drawn whenever a track
-   * exists), and the route is the extra you ask for. With no vessel switched
-   * on there is nothing to draw, which keeps the toggle disabled rather than
-   * offering to draw nothing.
-   */
-  const [showVesselRoutes, setShowVesselRoutes] = useState(false);
   /**
    * Measured intake, keyed by station code, from `/api/station-data`. Only the
    * stations that report weighbridge data appear here; the rest simply have no
@@ -433,6 +444,44 @@ export default function HomePage() {
         if (err instanceof DOMException && err.name === "AbortError") return;
         console.warn("[waste-map] Weighbridge data unavailable:", err);
         setStationRecords({});
+      }
+    }
+
+    load();
+    return () => controller.abort();
+  }, []);
+
+  // ------------------------------------------------------------------
+  // Load the vessel positions the app has stored
+  // ------------------------------------------------------------------
+  // The app owns a store (`data/vessels/tracks.json`, written by the ingest
+  // API or the collector) and serves it from `/api/vessel-tracks`. The bundled
+  // snapshot is already on screen by the time this resolves, so this can only
+  // ever *add* data: an empty store, a 404 or a network failure leaves the
+  // snapshot alone. A vessel overlay is not worth an error state.
+  useEffect(() => {
+    const controller = new AbortController();
+
+    async function load() {
+      try {
+        const res = await fetch("/api/vessel-tracks", {
+          signal: controller.signal,
+          cache: "no-store",
+        });
+        if (!res.ok) return;
+        const json = (await res.json()) as {
+          source?: string;
+          vessels?: Parameters<typeof parseTracks>[0];
+        };
+        if (controller.signal.aborted) return;
+        if (json.source !== "store" || !json.vessels?.length) return;
+        const stored = parseTracks(json.vessels);
+        if (stored.length === 0) return;
+        setTracks(stored);
+        setTracksSource("store");
+      } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        console.warn("[waste-map] Vessel store unavailable:", err);
       }
     }
 
@@ -572,28 +621,43 @@ export default function HomePage() {
   const handleClose = useCallback(() => setSelected(null), []);
 
   /**
-   * Last sailing routes on / off. Switching on also flies the camera to the
-   * recorded tracks: they are a few kilometres long, so at the territory
-   * overview they would otherwise be a handful of pixels the user has to go
-   * looking for. Switching off leaves the camera where it is — and leaves the
-   * vessel markers where they are, since those are drawn regardless.
+   * A vessel was clicked on the map.
    *
-   * The fly is deliberately NOT inside the setState updater — an updater must
-   * stay pure, or React's double-invocation in development fires it twice. It
-   * is not called here either: `focusVessels` reads the map's current vessel
+   * That one gesture is the whole entry point to the route: it selects the
+   * vessel, draws its route and opens the card holding the time search. There
+   * is no separate route switch any more — "show me this ship's sailing" and
+   * "show me when" are the same request, made by pointing at the ship.
+   *
+   * Clicking the same vessel again closes the card and puts it back to a plain
+   * marker, so the gesture toggles instead of being a one-way door.
+   *
+   * The camera move is NOT issued here: `focusVessels` reads the map's vessel
    * selection, which only updates on the next render, so firing it now would
-   * frame the selection as it was *before* the click. The effect below runs
-   * after that render instead.
+   * frame the previous selection. The effect below runs after that render.
    */
-  const toggleVessels = useCallback(() => {
-    setShowVesselRoutes((prev) => !prev);
-  }, []);
+  const handleSelectVessel = useCallback(
+    (mmsi: string) => {
+      const next = activeVessel === mmsi ? null : mmsi;
+      setActiveVessel(next);
+      // A new vessel means a new recording: a window carried over from the
+      // other ship's track could easily fall outside this one and show an
+      // empty card for no visible reason.
+      if (next !== null) setVesselWindow(null);
+      // On phones the cards are one accordion above the dock, so the vessel
+      // card must displace whatever sheet was open rather than stack on it.
+      if (next !== null) {
+        setListOpen(false);
+        setLegendOpen(false);
+      }
+    },
+    [activeVessel]
+  );
 
-  // Fly to the routes once they are actually on screen. `showVesselRoutes`
-  // only changes on a click, so this fires exactly when the user asks for it.
+  // Frame the route once it is actually on screen. `activeVessel` only changes
+  // on a click, so this fires exactly when the user asks to see a route.
   useEffect(() => {
-    if (showVesselRoutes) mapHandle.current?.focusVessels();
-  }, [showVesselRoutes]);
+    if (activeVessel) mapHandle.current?.focusVessels();
+  }, [activeVessel]);
 
   /** Switch one vessel on or off. */
   const toggleVessel = useCallback(
@@ -602,48 +666,45 @@ export default function HomePage() {
         ? visibleVessels.filter((m) => m !== mmsi)
         : [...visibleVessels, mmsi];
       setVisibleVessels(next);
-      // Turning the last vessel off would leave the route switch on with
-      // nothing to draw, so switch the route off with it. Computed outside the
-      // updater on purpose — an updater must stay pure.
-      if (next.length === 0) setShowVesselRoutes(false);
+      // Hiding the vessel whose route is open must close its card too —
+      // otherwise the card would be searching a track that is no longer drawn.
+      if (activeVessel === mmsi && !next.includes(mmsi)) setActiveVessel(null);
     },
-    [visibleVessels]
+    [visibleVessels, activeVessel]
   );
 
   /** All vessels on, or all off if they are already all on. */
   const toggleAllVessels = useCallback(() => {
-    const all = visibleVessels.length === VESSEL_TRACKS.length;
-    setVisibleVessels(all ? [] : VESSEL_TRACKS.map((v) => v.mmsi));
-    if (all) setShowVesselRoutes(false);
-  }, [visibleVessels]);
+    const all = visibleVessels.length === tracks.length;
+    setVisibleVessels(all ? [] : tracks.map((v) => v.mmsi));
+    if (all) setActiveVessel(null);
+  }, [visibleVessels, tracks]);
 
   /**
-   * The time search window, in epoch ms.
+   * The vessel whose card is open, and its own recorded span.
    *
-   * `null` means the whole recording. The collector keeps a rolling 24 hours,
-   * so "the whole recording" IS the 24-hour view the user asked for — and it
-   * does not go stale while the page sits open, the way a window computed from
-   * `Date.now()` at mount would.
+   * The search is scoped to ONE vessel: its track is the only thing it can
+   * narrow, so the bounds offered are that vessel's, not the union of both.
+   * The union would let the user pick a window that is empty for this ship and
+   * full for the other, which reads as a broken search.
    */
-  const recordedSpan = useMemo(() => {
-    if (VESSEL_TRACKS.length === 0) return null;
-    let from = Infinity;
-    let to = -Infinity;
-    for (const track of VESSEL_TRACKS) {
-      const span = trackSpan(track);
-      if (span.from < from) from = span.from;
-      if (span.to > to) to = span.to;
-    }
-    return Number.isFinite(from) ? { from, to } : null;
-  }, []);
+  const activeTrack = useMemo(
+    () => tracks.find((t) => t.mmsi === activeVessel) ?? null,
+    [tracks, activeVessel]
+  );
 
-  const activeWindow = vesselWindow ?? recordedSpan;
+  const activeSpan = useMemo(
+    () => (activeTrack ? trackSpan(activeTrack) : null),
+    [activeTrack]
+  );
+
+  const activeWindow = vesselWindow ?? activeSpan;
 
   /** Narrow or widen the search. Either bound may be moved independently. */
   const setWindowBound = useCallback(
     (which: "from" | "to", ms: number) => {
       setVesselWindow((prev) => {
-        const base = prev ?? recordedSpan;
+        const base = prev ?? activeSpan;
         if (!base) return prev;
         const next = { ...base, [which]: ms };
         // Guard the inverted range a half-edited input produces: dragging
@@ -651,18 +712,22 @@ export default function HomePage() {
         return next.from <= next.to ? next : { from: next.to, to: next.from };
       });
     },
-    [recordedSpan]
+    [activeSpan]
   );
 
-  /** Which of the selected vessels actually fall inside the current window. */
-  const vesselsInWindow = useMemo(() => {
-    if (!activeWindow) return 0;
-    return VESSEL_TRACKS.filter((track) => {
-      if (!visibleVessels.includes(track.mmsi)) return false;
-      const span = trackSpan(track);
-      return span.to >= activeWindow.from && span.from <= activeWindow.to;
-    }).length;
-  }, [activeWindow, visibleVessels]);
+  /**
+   * How many of this vessel's reports fall inside the window.
+   *
+   * Shown as a count rather than a yes/no: a route drawn from three reports is
+   * a very different thing from one drawn from three hundred, and the card is
+   * the only place that can say so.
+   */
+  const reportsInWindow = useMemo(() => {
+    if (!activeTrack || !activeWindow) return 0;
+    return activeTrack.points.filter(
+      (p) => p.t >= activeWindow.from && p.t <= activeWindow.to
+    ).length;
+  }, [activeTrack, activeWindow]);
 
   /**
    * Bottom-dock tabs (phones only).
@@ -690,11 +755,23 @@ export default function HomePage() {
   );
 
   /**
-   * Mobile only: whenever the user moves the map (pan / zoom / rotate), collapse
-   * every floating sheet so the map is the only thing on screen. Driven by
-   * WasteMap3D's `onUserMapInteract`, which fires only for real user input.
+   * A real user gesture on the map (pan / zoom / rotate).
+   *
+   * The legend collapses on **every** width: it is a reference card, and once
+   * the user starts moving the map they are looking at the map, not at a list
+   * of category counts. Collapsing it hands the space back, and one click
+   * brings it back.
+   *
+   * The ranking list collapses only below `lg`. On a phone the panels are one
+   * accordion above the dock, so leaving one open would cover the map the user
+   * just moved; on a desktop it is a separate card in its own corner, and
+   * closing it on every pan would be an unasked-for loss of context.
+   *
+   * The vessel card is deliberately left alone — it is the panel the user just
+   * opened by clicking a ship, and panning along a route is what it is for.
    */
   const handleUserMapInteract = useCallback(() => {
+    setLegendOpen(false);
     if (
       typeof window !== "undefined" &&
       window.matchMedia("(max-width: 1023px)").matches
@@ -731,6 +808,22 @@ export default function HomePage() {
       return Math.min(FONT_SCALE_MAX, Math.max(FONT_SCALE_MIN, next));
     });
   }, []);
+
+  /**
+   * Escape closes the vessel card.
+   *
+   * The card is not a modal and has its own close button, so this is a
+   * convenience rather than the only way out — but it is the one key a user
+   * tries when a panel has taken over part of the screen.
+   */
+  useEffect(() => {
+    if (!activeVessel) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setActiveVessel(null);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [activeVessel]);
 
   /**
    * The vessel picker popover closes on any pointer-down outside it. Not a
@@ -776,13 +869,13 @@ export default function HomePage() {
           onClick={toggleAllVessels}
           className="text-[length:calc(10px*var(--fs))] font-semibold text-emerald-300/90 transition-colors hover:text-emerald-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60"
         >
-          {visibleVessels.length === VESSEL_TRACKS.length
+          {visibleVessels.length === tracks.length
             ? t("vesselsNone", lang)
             : t("vesselsShowAll", lang)}
         </button>
       </div>
       <div className="p-1">
-        {VESSEL_TRACKS.map((track) => {
+        {tracks.map((track) => {
           const on = visibleVessels.includes(track.mmsi);
           return (
             <button
@@ -966,9 +1059,11 @@ export default function HomePage() {
           mapStyle={mapStyle}
           lang={lang}
           visibleCategories={visibleCategories}
-          showVesselRoutes={showVesselRoutes}
+          vesselTracks={tracks}
+          activeVesselMmsi={activeVessel}
           visibleVesselMmsis={visibleVessels}
           vesselWindow={activeWindow}
+          onSelectVessel={handleSelectVessel}
           emptyHint={!loading && visibleFacilities.length === 0}
           onUserMapInteract={handleUserMapInteract}
         />
@@ -1369,104 +1464,11 @@ export default function HomePage() {
 
               {legendOpen && (
                 <div className="space-y-1 border-t border-white/10 px-2 py-2">
-                  {/* Last sailing route. Deliberately NOT a category checkbox:
-                      it is a different kind of layer, so it sits above the
-                      facility categories rather than beside them. It draws only
-                      for the vessels switched on in the toolbar's vessel
-                      control, so with none selected there is nothing to draw —
-                      hence the disabled state, which says why rather than
-                      silently doing nothing. */}
-                  <button
-                    onClick={toggleVessels}
-                    aria-pressed={showVesselRoutes}
-                    disabled={visibleVessels.length === 0}
-                    title={
-                      visibleVessels.length === 0
-                        ? t("vesselRouteNeedsVessel", lang)
-                        : undefined
-                    }
-                    className={cn(
-                      "flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60",
-                      visibleVessels.length === 0
-                        ? "cursor-not-allowed opacity-40"
-                        : showVesselRoutes
-                          ? "hover:bg-white/8"
-                          : "opacity-50 hover:opacity-80"
-                    )}
-                  >
-                    <span
-                      className="h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-white/20"
-                      style={{
-                        // With one vessel selected, show its own colour, so the
-                        // legend swatch matches the route on the map.
-                        backgroundColor:
-                          visibleVessels.length === 1
-                            ? vesselColor(visibleVessels[0]).hex
-                            : "#38bdf8",
-                      }}
-                    />
-                    <span className="flex-1 truncate text-[length:calc(11.5px*var(--fs))] font-medium text-white/85">
-                      {t("vesselRoute", lang)}
-                    </span>
-                    <span className="text-[length:calc(10px*var(--fs))] tabular-nums text-white/40">
-                      {visibleVessels.length}
-                    </span>
-                  </button>
-
-                  {/* Time search. Only worth showing once a route is drawn:
-                      narrowing a window with nothing in it is a dead control.
-                      Laid out inline — label beside field — because two
-                      half-width fields leave most of each row empty and make
-                      the card far taller than the two timestamps it holds. */}
-                  {showVesselRoutes && activeWindow && (
-                    <div className="px-2 pb-1.5 pt-0.5">
-                      <div className="flex items-center gap-1.5 pb-1">
-                        <Clock className="h-3 w-3 shrink-0 text-white/35" />
-                        <span className="text-[length:calc(10px*var(--fs))] font-semibold uppercase tracking-wider text-white/45">
-                          {t("timeSearch", lang)}
-                        </span>
-                        <button
-                          onClick={() => setVesselWindow(null)}
-                          className="ml-auto rounded px-1 text-[length:calc(9.5px*var(--fs))] font-semibold text-emerald-300/80 transition-colors hover:text-emerald-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60"
-                        >
-                          {t("timeReset", lang)}
-                        </button>
-                      </div>
-                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                        {(
-                          [
-                            ["from", t("timeFrom", lang), activeWindow.from],
-                            ["to", t("timeTo", lang), activeWindow.to],
-                          ] as const
-                        ).map(([which, label, value]) => (
-                          <label key={which} className="flex items-center gap-1">
-                            <span className="text-[length:calc(9.5px*var(--fs))] text-white/40">
-                              {label}
-                            </span>
-                            <input
-                              type="datetime-local"
-                              value={toLocalInput(value)}
-                              // Bounded to the recording: a window outside it
-                              // can only ever be empty, so the control should
-                              // not offer it.
-                              min={recordedSpan ? toLocalInput(recordedSpan.from) : undefined}
-                              max={recordedSpan ? toLocalInput(recordedSpan.to) : undefined}
-                              onChange={(e) => {
-                                const ms = fromLocalInput(e.target.value);
-                                if (ms !== null) setWindowBound(which, ms);
-                              }}
-                              className="w-[8.6rem] rounded-md border border-white/12 bg-slate-800/70 px-1.5 py-0.5 text-[length:calc(10px*var(--fs))] tabular-nums text-white/85 [color-scheme:dark] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60"
-                            />
-                          </label>
-                        ))}
-                      </div>
-                      {vesselsInWindow === 0 && (
-                        <p className="mt-1 text-[length:calc(9.5px*var(--fs))] text-amber-300/80">
-                          {t("timeEmpty", lang)}
-                        </p>
-                      )}
-                    </div>
-                  )}
+                  {/* The vessel route no longer lives here. It is opened by
+                      clicking a ship on the map, which brings up a card with
+                      that vessel's time search — see `vesselCard` below. A
+                      route switch in the legend asked the user to turn on a
+                      layer and then hunt for the ship it belonged to. */}
 
                   {CATEGORY_ORDER.map((category) => {
                     const meta = CATEGORY_META[category];
@@ -1508,34 +1510,145 @@ export default function HomePage() {
 
                   <div className="mt-1 space-y-0.5 border-t border-white/10 px-2 pb-1 pt-2 text-[length:calc(9.5px*var(--fs))] leading-relaxed text-white/40">
                     <p>{t("legendPillarNote", lang)}</p>
-                    {VESSEL_TRACKS.length > 0 && visibleVessels.length === 0 && (
+                    {tracks.length > 0 && visibleVessels.length === 0 && (
                       <p>
                         {lang === "zh"
-                          ? "船隻預設隱藏。用字體大小旁邊的船隻按鈕選擇要顯示的船隻。"
-                          : "Vessels are off by default. Use the vessel switch beside the font size control to choose which to show."}
+                          ? "船隻預設隱藏。用字體大小旁邊的船隻按鈕選擇要顯示的船隻，再點擊海上的船查看它的航行紀錄。"
+                          : "Vessels are off by default. Pick one with the vessel switch beside the font size control, then click the ship on the map to see its sailing record."}
                       </p>
-                    )}
-                    {showVesselRoutes && (
-                      <>
-                        <p>
-                          {lang === "zh"
-                            ? "航線上的圓點每 10 分鐘一個。匯報之間的點是內插位置，滑鼠移到點上會顯示它所依據的兩次匯報時間。"
-                            : "Dots mark every 10 minutes along the route. Between reports the position is interpolated, so hovering a dot names the two reports it sits between."}
-                        </p>
-                        {recordedSpan && (
-                          <p>
-                            {lang === "zh"
-                              ? `記錄期間 ${formatStamp(recordedSpan.from)} – ${formatStamp(recordedSpan.to)}（${offsetLabel(recordedSpan.from)}），共 ${VESSEL_REPORT_COUNT} 次 AIS 匯報。`
-                              : `Recorded ${formatStamp(recordedSpan.from)} – ${formatStamp(recordedSpan.to)} (${offsetLabel(recordedSpan.from)}), ${VESSEL_REPORT_COUNT} AIS reports.`}
-                          </p>
-                        )}
-                      </>
                     )}
                   </div>
                 </div>
               )}
             </div>
           </div>
+
+          {/* Vessel card. Opened by clicking a ship on the map, and the only
+              place the route and its time search live now — a route switch in
+              the legend asked the user to turn on a layer and then find the
+              ship it belonged to. Closed by clicking the ship again, by the
+              close button, or by Escape.
+
+              Phones: a sheet above the dock, in the same slot as the ranking
+              and legend sheets (which `handleSelectVessel` closes, because the
+              dock shows one panel at a time). Desktop: a card at the bottom
+              centre, clear of the legend on the left and the info button on
+              the right. */}
+          {activeVessel && activeTrack && (
+            <div
+              data-testid="vessel-card"
+              className="pointer-events-auto w-full lg:absolute lg:bottom-4 lg:left-1/2 lg:w-[24rem] lg:-translate-x-1/2"
+            >
+              <div className="max-h-[46vh] overflow-y-auto rounded-t-2xl border border-b-0 border-white/12 bg-slate-900/90 shadow-2xl backdrop-blur-xl lg:max-h-none lg:rounded-2xl lg:border-b">
+                <div className="flex items-start gap-2 border-b border-white/10 px-3.5 py-2.5">
+                  <span
+                    className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-white/25"
+                    style={{ backgroundColor: vesselColor(activeVessel).hex }}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-[length:calc(12px*var(--fs))] font-semibold leading-tight text-white">
+                      {activeTrack.name}
+                    </p>
+                    <p className="mt-0.5 text-[length:calc(9.5px*var(--fs))] uppercase tracking-wider text-white/40">
+                      MMSI {activeVessel}
+                      {activeTrack.imo ? ` · IMO ${activeTrack.imo}` : ""}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setActiveVessel(null)}
+                    aria-label={t("close", lang)}
+                    title={t("close", lang)}
+                    className="grid h-6 w-6 shrink-0 place-items-center rounded-full text-white/45 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+
+                <div className="px-3 pb-2.5 pt-2">
+                  <div className="flex items-center gap-1.5 pb-1">
+                    <Clock className="h-3 w-3 shrink-0 text-white/35" />
+                    <span className="text-[length:calc(10px*var(--fs))] font-semibold uppercase tracking-wider text-white/45">
+                      {t("timeSearch", lang)}
+                    </span>
+                    <button
+                      onClick={() => setVesselWindow(null)}
+                      disabled={vesselWindow === null}
+                      className="ml-auto rounded px-1 text-[length:calc(9.5px*var(--fs))] font-semibold text-emerald-300/80 transition-colors hover:text-emerald-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60 disabled:opacity-30 disabled:hover:text-emerald-300/80"
+                    >
+                      {t("timeReset", lang)}
+                    </button>
+                  </div>
+
+                  {/* Inline — label beside field. Two half-width fields leave
+                      most of each row empty and make the card much taller than
+                      the two timestamps it holds. */}
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    {activeWindow &&
+                      (
+                        [
+                          ["from", t("timeFrom", lang), activeWindow.from],
+                          ["to", t("timeTo", lang), activeWindow.to],
+                        ] as const
+                      ).map(([which, label, value]) => (
+                        <label key={which} className="flex items-center gap-1">
+                          <span className="text-[length:calc(9.5px*var(--fs))] text-white/40">
+                            {label}
+                          </span>
+                          <input
+                            type="datetime-local"
+                            value={toLocalInput(value)}
+                            // Bounded to this vessel's own recording: a window
+                            // outside it can only ever be empty, so the control
+                            // should not offer it.
+                            min={activeSpan ? toLocalInput(activeSpan.from) : undefined}
+                            max={activeSpan ? toLocalInput(activeSpan.to) : undefined}
+                            onChange={(e) => {
+                              const ms = fromLocalInput(e.target.value);
+                              if (ms !== null) setWindowBound(which, ms);
+                            }}
+                            className="w-[8.6rem] rounded-md border border-white/12 bg-slate-800/70 px-1.5 py-0.5 text-[length:calc(10px*var(--fs))] tabular-nums text-white/85 [color-scheme:dark] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60"
+                          />
+                        </label>
+                      ))}
+                  </div>
+
+                  {reportsInWindow === 0 ? (
+                    <p className="mt-1 text-[length:calc(9.5px*var(--fs))] text-amber-300/80">
+                      {t("timeEmpty", lang)}
+                    </p>
+                  ) : (
+                    activeSpan && (
+                      <p className="mt-1 text-[length:calc(9.5px*var(--fs))] tabular-nums leading-relaxed text-white/40">
+                        {lang === "zh"
+                          ? `${reportsInWindow} 次 AIS 匯報　·　${formatStamp(activeSpan.from)} – ${formatStamp(activeSpan.to)}（${offsetLabel(activeSpan.from)}）`
+                          : `${reportsInWindow} AIS report${reportsInWindow === 1 ? "" : "s"} · ${formatStamp(activeSpan.from)} – ${formatStamp(activeSpan.to)} (${offsetLabel(activeSpan.from)})`}
+                      </p>
+                    )
+                  )}
+
+                  <p className="mt-1 text-[length:calc(9.5px*var(--fs))] leading-relaxed text-white/35">
+                    {lang === "zh"
+                      ? "圓點每 10 分鐘一個，滑鼠移上去可看該時刻的位置、速度、航向與狀態。匯報之間的位置是內插值。"
+                      : "Dots mark every 10 minutes — hover one for its position, speed, course and status. Between reports the position is interpolated."}
+                  </p>
+
+                  {/* Where the data came from. Not decoration: it is the
+                      difference between "a report collected a minute ago" and
+                      "the snapshot this build shipped with". */}
+                  <p className="mt-1 flex items-center gap-1 text-[length:calc(9px*var(--fs))] text-white/30">
+                    <Database className="h-2.5 w-2.5 shrink-0" />
+                    {tracksSource === "store"
+                      ? lang === "zh"
+                        ? "來自應用程式儲存的資料"
+                        : "From the app's stored data"
+                      : lang === "zh"
+                        ? "來自建置時的資料快照"
+                        : "From the snapshot bundled at build time"}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Dock — phones only. Two short tabs plus the map "i" button.
               `lg:contents` dissolves this wrapper on desktop, which drops the

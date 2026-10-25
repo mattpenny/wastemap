@@ -232,6 +232,12 @@ const DICT = {
   ],
   vesselsNone: ["No vessel shown", "未顯示船隻"],
   vesselsShowAll: ["Show all", "全部顯示"],
+  /**
+   * `vesselRoute` / `vesselRouteNeedsVessel` are no longer rendered: the route
+   * is opened by clicking a ship, not by a switch in the legend. Kept because
+   * the wording is still the right label for the feature if it ever needs one
+   * again, and removing a key is a bigger change than leaving it.
+   */
   vesselRoute: ["Last sailing route (AIS)", "上次航行航線 (AIS)"],
   vesselRouteNeedsVessel: [
     "Switch a vessel on first — the route is drawn only for the vessels you selected.",

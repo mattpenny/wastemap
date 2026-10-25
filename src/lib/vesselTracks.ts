@@ -48,7 +48,7 @@ export interface VesselTrack {
   points: VesselTrackPoint[];
 }
 
-interface RawPoint {
+export interface RawPoint {
   t: number;
   lat: number;
   lng: number;
@@ -57,7 +57,7 @@ interface RawPoint {
   nav: number | null;
 }
 
-interface RawVessel {
+export interface RawVessel {
   mmsi: string | number;
   imo?: string | number | null;
   name: string;
@@ -75,23 +75,45 @@ interface RawFile {
 const file = raw as unknown as RawFile;
 
 /**
- * Tracks that can actually be drawn, oldest point first.
+ * Turn a raw vessel array into drawable tracks, oldest point first.
+ *
+ * Exported because two sources feed it and they must be parsed identically:
+ * the JSON bundled at build time, and the app's own store served by
+ * `GET /api/vessel-tracks`. Anything that only one of them went through would
+ * be a difference between "what you see locally" and "what you see deployed".
  *
  * Points are re-sorted by timestamp because AIS delivery order is not
- * guaranteed, and the interpolation helpers assume a monotonic series.
+ * guaranteed, and the interpolation helpers assume a monotonic series. A track
+ * with fewer than two points is dropped: one point cannot define a route.
  */
-export const VESSEL_TRACKS: VesselTrack[] = (file.vessels ?? [])
-  .map((v) => ({
-    mmsi: String(v.mmsi),
-    imo: v.imo == null ? null : String(v.imo),
-    name: String(v.name ?? "").trim(),
-    destination: v.destination,
-    draught: v.draught,
-    points: [...(v.points ?? [])]
-      .filter((p) => Number.isFinite(p.t) && Number.isFinite(p.lat) && Number.isFinite(p.lng))
-      .sort((a, b) => a.t - b.t),
-  }))
-  .filter((v) => v.points.length >= 2);
+export function parseTracks(vessels: RawVessel[] | null | undefined): VesselTrack[] {
+  return (vessels ?? [])
+    .map((v) => ({
+      mmsi: String(v.mmsi),
+      imo: v.imo == null ? null : String(v.imo),
+      name: String(v.name ?? "").trim(),
+      destination: v.destination,
+      draught: v.draught,
+      points: [...(v.points ?? [])]
+        .filter((p) => Number.isFinite(p.t) && Number.isFinite(p.lat) && Number.isFinite(p.lng))
+        .sort((a, b) => a.t - b.t),
+    }))
+    .filter((v) => v.points.length >= 2);
+}
+
+/**
+ * The recording bundled into the build.
+ *
+ * This is the floor, not the ceiling: the map asks `GET /api/vessel-tracks`
+ * for anything newer stored in the app, and falls back to this when the store
+ * is empty or unreachable — which is the normal state on a static host.
+ */
+export const VESSEL_TRACKS: VesselTrack[] = parseTracks(file.vessels);
+
+/** Total AIS reports across a set of tracks. */
+export function reportCount(tracks: VesselTrack[]): number {
+  return tracks.reduce((sum, t) => sum + t.points.length, 0);
+}
 
 /** When the track file was last written, or null if it never has been. */
 export const VESSEL_TRACKS_GENERATED_AT: string | null = file.generatedAt ?? null;
@@ -146,6 +168,8 @@ export interface VesselSample {
   position: [number, number];
   course: number | null;
   sog: number | null;
+  /** AIS navigational status (0 under way, 1 at anchor, 5 moored, …). */
+  nav: number | null;
   /** Timestamp of the recorded report at or before the sample. */
   fromT: number;
   /** Timestamp of the recorded report at or after it (equals `fromT` when exact). */
@@ -180,6 +204,9 @@ export function sampleAt(track: VesselTrack, timeMs: number): VesselSample | nul
     position: [a.lng + (b.lng - a.lng) * f, a.lat + (b.lat - a.lat) * f],
     course: a.cog ?? b.cog ?? null,
     sog: a.sog ?? b.sog ?? null,
+    // The status of the report at or before the sample: it describes the leg
+    // the vessel is on, not the one it is about to start.
+    nav: a.nav ?? b.nav ?? null,
     fromT: a.t,
     toT: b.t,
   };
@@ -233,6 +260,7 @@ export function sampleTrack(
       position: s.position,
       course: s.course,
       sog: s.sog,
+      nav: s.nav,
       fromT: s.fromT,
       toT: s.toT,
     });
@@ -247,6 +275,8 @@ export interface VesselTimeMark {
   position: [number, number];
   course: number | null;
   sog: number | null;
+  /** AIS navigational status at the mark. */
+  nav: number | null;
   fromT: number;
   toT: number;
 }

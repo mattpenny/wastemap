@@ -72,11 +72,20 @@ export interface WasteMap3DProps {
   /** When true, show a "no facilities" hint instead of an empty map. */
   emptyHint?: boolean;
   /**
-   * Animate the recorded AIS routes. Only meaningful for vessels the user has
-   * switched on: this adds the route, its 10-minute marks, the wake and the
-   * playback on top of the markers.
+   * The recorded tracks to draw. Passed in rather than imported so the app can
+   * swap in whatever its own store returned; `VESSEL_TRACKS` is the bundled
+   * fallback the caller starts from.
    */
-  showVesselRoutes?: boolean;
+  vesselTracks?: VesselTrack[];
+  /**
+   * The vessel whose route is on — the one the user clicked.
+   *
+   * Null means every drawn vessel is a marker only: "where the ships are now".
+   * This is the single switch for the route, its 10-minute marks, the wake and
+   * the playback; the route belongs to one vessel because the time search in
+   * the card applies to that vessel's recording.
+   */
+  activeVesselMmsi?: string | null;
   /**
    * MMSIs of the vessels the user has chosen to display. Empty by default —
    * the vessels are off until asked for, because a waste map is primarily a
@@ -88,6 +97,8 @@ export interface WasteMap3DProps {
    * "the whole recording", which the collector already caps at 24 hours.
    */
   vesselWindow?: { from: number; to: number } | null;
+  /** Fired when a vessel marker or one of its dots is clicked. */
+  onSelectVessel?: (mmsi: string) => void;
   /**
    * Fired on a *user-initiated* map move (pan / zoom / rotate / pitch). Used by
    * the mobile UI to collapse its floating sheets. Programmatic moves (e.g. the
@@ -214,9 +225,35 @@ function formatVesselTime(ms: number): string {
   return `${pad(d.getDate())}/${pad(d.getMonth() + 1)} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+/**
+ * AIS navigational status, as the vessel reported it.
+ *
+ * Shown in the dot tooltip because "0.0 kn" on its own is ambiguous: a ship at
+ * zero knots is either moored or stopped in the fairway, and only the status
+ * code distinguishes them.
+ */
+const NAV_STATUS: Record<number, [string, string]> = {
+  0: ["Under way using engine", "機動航行中"],
+  1: ["At anchor", "拋錨"],
+  2: ["Not under command", "失去控制"],
+  3: ["Restricted manoeuvrability", "操縱受限"],
+  4: ["Constrained by draught", "受吃水限制"],
+  5: ["Moored", "繫泊"],
+  6: ["Aground", "擱淺"],
+  7: ["Fishing", "捕魚中"],
+  8: ["Under way sailing", "帆航中"],
+  15: ["Undefined", "未定義"],
+};
+
+function navLabel(nav: number | null, lang: Lang): string | null {
+  if (nav == null) return null;
+  const entry = NAV_STATUS[nav];
+  if (!entry) return null;
+  return lang === "zh" ? entry[1] : entry[0];
+}
+
 /** Initial bearing from one coordinate to another, degrees clockwise from north. */
-function bearingDeg(from: [number, number], to: [number, number]): number {
-  const rad = Math.PI / 180;
+function bearingDeg(from: [number, number], to: [number, number]): number {  const rad = Math.PI / 180;
   const [lon1, lat1] = from;
   const [lon2, lat2] = to;
   const y = Math.sin((lon2 - lon1) * rad) * Math.cos(lat2 * rad);
@@ -342,9 +379,11 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
     lang,
     visibleCategories,
     emptyHint = false,
-    showVesselRoutes = false,
+    vesselTracks = VESSEL_TRACKS,
+    activeVesselMmsi = null,
     visibleVesselMmsis,
     vesselWindow = null,
+    onSelectVessel,
     onUserMapInteract,
   },
   ref
@@ -372,7 +411,7 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
    */
   const vesselGeometry = useMemo(() => {
     const visible = new Set(visibleVesselMmsis ?? []);
-    return VESSEL_TRACKS.filter((track) => visible.has(track.mmsi)).map((track) => {
+    return vesselTracks.filter((track) => visible.has(track.mmsi)).map((track) => {
       const span = trackSpan(track);
       const lo = vesselWindow ? Math.max(span.from, vesselWindow.from) : span.from;
       const hi = vesselWindow ? Math.min(span.to, vesselWindow.to) : span.to;
@@ -380,12 +419,17 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
         track,
         lo,
         hi,
+        // Only the clicked vessel gets a route. The others stay markers: the
+        // time search belongs to one vessel's recording, so drawing a second
+        // route that the card does not control would be a lie about what the
+        // card is showing.
+        active: track.mmsi === activeVesselMmsi,
         // An empty window is a real state (the search selects a quiet stretch),
         // not an error — it just means no route and no dots.
         marks: hi > lo ? sampleTrack(track, lo, hi, VESSEL_MARK_STEP_MS) : [],
       };
     });
-  }, [visibleVesselMmsis, vesselWindow]);
+  }, [vesselTracks, visibleVesselMmsis, vesselWindow, activeVesselMmsi]);
 
   // The imperative handle is memoised on `facilities`, so it would capture a
   // stale selection. It reads this ref instead.
@@ -396,6 +440,12 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
   // latest selection handler in a ref.
   const onSelectRef = useRef(onSelectFacility);
   onSelectRef.current = onSelectFacility;
+
+  // The click handler is memoised on `onSelectFacility` only, so the vessel
+  // callback goes through a ref too — otherwise a new inline arrow from the
+  // parent would either be missed or force the handler to be rebuilt.
+  const onSelectVesselRef = useRef(onSelectVessel);
+  onSelectVesselRef.current = onSelectVessel;
 
   // Same for the user-interaction callback (mobile collapse-on-move).
   const onInteractRef = useRef(onUserMapInteract);
@@ -725,11 +775,12 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
     //     overlay the user asks for.
     //  2. `vesselWindow` — which stretch of the recording the time search has
     //     selected.
-    //  3. `showVesselRoutes` — whether to draw the route, its marks, its wake
-    //     and the playback, on top of the marker that says where the vessel is.
+    //  3. `activeVesselMmsi` — the vessel the user clicked, whose route, marks,
+    //     wake and playback are drawn on top of the marker that says where it
+    //     is. Null means every drawn vessel is a marker and nothing more.
     //
     // Everything is driven by the recorded AIS reports — see `vesselTracks.ts`.
-    const vesselLayers = vesselGeometry.flatMap(({ track, lo, hi, marks }) => {
+    const vesselLayers = vesselGeometry.flatMap(({ track, lo, hi, marks, active }) => {
       const color = vesselColor(track.mmsi);
       const points = track.points;
       const last = points[points.length - 1];
@@ -751,7 +802,7 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
       let dots: VesselDot[] | null = null;
       let wake: [number, number][] | null = null;
 
-      if (showVesselRoutes && hi > lo) {
+      if (active && hi > lo) {
         // The line's vertices are the real reports inside the window, closed
         // off at both edges by interpolation — so narrowing the time search
         // shortens the line without inventing a bend in it.
@@ -817,9 +868,7 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
           : []),
         ...(dots
           ? [
-              // The 10-minute marks. Pickable so each one can state its time —
-              // and, just as importantly, which two reports it was
-              // interpolated between.
+              // The 10-minute marks, drawn small so the route stays readable.
               new ScatterplotLayer<VesselDot>({
                 id: `vessel-dot-${track.mmsi}`,
                 data: dots,
@@ -827,10 +876,27 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
                 getFillColor: [...color.rgb, 235],
                 getLineColor: [255, 255, 255, 200],
                 stroked: true,
-                getRadius: 2.6,
+                getRadius: 2.8,
                 radiusUnits: "pixels",
                 lineWidthUnits: "pixels",
                 getLineWidth: 0.9,
+                // Picking is geometric, so this layer could be pickable — but
+                // a 2.8px target is a miss waiting to happen, and enlarging the
+                // drawn dot to suit the pointer would make the route look like
+                // a string of beads. The invisible layer below carries the
+                // hits instead.
+                pickable: false,
+              }),
+              // The hit area. Transparent, drawn on top of the visible dot, and
+              // roughly three times its radius — a comfortable pointer target
+              // that changes nothing about how the route looks.
+              new ScatterplotLayer<VesselDot>({
+                id: `vessel-dotpick-${track.mmsi}`,
+                data: dots,
+                getPosition: (d) => d.position,
+                getFillColor: [...color.rgb, 0],
+                getRadius: 9,
+                radiusUnits: "pixels",
                 pickable: true,
               }),
             ]
@@ -866,7 +932,7 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
     heightFor,
     elevationScale,
     landfillScale,
-    showVesselRoutes,
+    activeVesselMmsi,
     vesselGeometry,
     bearing,
   ]);
@@ -1237,7 +1303,7 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
   // back here. Only deck.gl props are pushed — React never re-renders, so the
   // 30fps clock costs nothing in the component tree.
   useEffect(() => {
-    if (!showVesselRoutes || vesselGeometry.length === 0) return;
+    if (!activeVesselMmsi || vesselGeometry.length === 0) return;
     // Nothing selected in the time search means nothing to play back; leave
     // the clock stopped rather than spinning a frame loop over an empty window.
     if (vesselGeometry.every((g) => g.hi <= g.lo)) return;
@@ -1260,7 +1326,7 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
 
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
-  }, [showVesselRoutes, pushLayers, vesselGeometry]);
+  }, [activeVesselMmsi, pushLayers, vesselGeometry]);
 
   // ------------------------------------------------------------------
   // Swap basemap. For the official map the language is part of the style
@@ -1317,10 +1383,10 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
       },
       focusVessels: () => {
         const map = mapRef.current;
-        // Only the vessels the user has switched on. Framing a hidden ship
-        // would fly the camera to empty water and leave the user wondering
-        // what the map was looking at.
-        const visible = vesselGeometryRef.current;
+        // Only the vessel whose route is on. Framing the others would fly the
+        // camera to a marker with nothing to look at, and the route is what
+        // the user just asked to see.
+        const visible = vesselGeometryRef.current.filter((g) => g.active);
         if (!map || visible.length === 0) return;
         // Bounding box of every point in the selected window, with a little
         // sea around it. `lo`/`hi` are already clipped to the recording, so a
@@ -1376,8 +1442,9 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
       return;
     }
     // Vessel markers share the overlay with the facility layers, so tell them
-    // apart by the layer that produced the pick.
-    if (info.layer?.id?.startsWith("vessel-dot-")) {
+    // apart by the layer that produced the pick. `vessel-dot` also matches the
+    // invisible `vessel-dotpick-` hit layer, which is the point.
+    if (info.layer?.id?.startsWith("vessel-dot")) {
       setHovered({ dot: info.object as VesselDot, x: info.x, y: info.y });
       return;
     }
@@ -1398,17 +1465,28 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
       // the facility layers, but they are NOT facilities: a `VesselMarker` has
       // no `id`, `category` or `metrics`, and the drawer dereferences all
       // three. Passing one through crashed the whole page, so anything from a
-      // `vessel-` layer is handled here instead — clear any open site, then
-      // frame the point that was clicked.
+      // `vessel-` layer is handled here instead.
       if (info.layer?.id?.startsWith("vessel-")) {
-        const { position } = info.object as VesselMarker | VesselDot;
+        const picked = info.object as VesselMarker | VesselDot;
+        const isDot = info.layer?.id?.startsWith("vessel-dot") ?? false;
+
+        // Clear any open site: the vessel card and the facility drawer are two
+        // different answers to "what did I just click".
         onSelectFacility(null);
-        mapRef.current?.flyTo({
-          center: position,
-          zoom: 14.5,
-          duration: 1200,
-          essential: true,
-        });
+        onSelectVesselRef.current?.(picked.mmsi);
+
+        // Clicking a mark means "show me this moment", so go there. Clicking
+        // the hull means "show me this vessel's route", and the parent frames
+        // the whole route at pitch 0 — zooming to 14.5 on a moored ship would
+        // just fill the screen with water.
+        if (isDot) {
+          mapRef.current?.flyTo({
+            center: picked.position,
+            zoom: 15,
+            duration: 1200,
+            essential: true,
+          });
+        }
         return;
       }
 
@@ -1492,11 +1570,26 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
                 ? `介乎 ${formatVesselTime(hovered.dot.fromT)} 及 ${formatVesselTime(hovered.dot.toT)} 兩次匯報之間（內插）`
                 : `Between reports at ${formatVesselTime(hovered.dot.fromT)} and ${formatVesselTime(hovered.dot.toT)} (interpolated)`}
           </p>
-          {hovered.dot.sog != null && (
-            <p className="mt-0.5 text-[length:calc(10px*var(--fs))] tabular-nums text-white/45">
-              {hovered.dot.sog.toFixed(1)} kn
-            </p>
-          )}
+          {/* The rest of what the vessel was reporting at this moment. A dot is
+              a data point, so it should be able to answer "how fast, which
+              way, doing what" without opening anything else. */}
+          <div className="mt-1.5 flex flex-wrap gap-x-2.5 gap-y-0.5 border-t border-white/10 pt-1.5 text-[length:calc(10px*var(--fs))] tabular-nums text-white/55">
+            {hovered.dot.sog != null && (
+              <span>
+                <span className="text-white/35">SOG </span>
+                {hovered.dot.sog.toFixed(1)} kn
+              </span>
+            )}
+            {hovered.dot.course != null && (
+              <span>
+                <span className="text-white/35">COG </span>
+                {Math.round(hovered.dot.course)}°
+              </span>
+            )}
+            {navLabel(hovered.dot.nav, lang) && (
+              <span className="text-white/55">{navLabel(hovered.dot.nav, lang)}</span>
+            )}
+          </div>
         </div>
       )}
 

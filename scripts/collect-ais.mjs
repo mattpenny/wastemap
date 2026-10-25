@@ -18,7 +18,18 @@
  *   npm run ais:collect              # collect until Ctrl-C
  *   npm run ais:collect -- --minutes 90
  *   npm run ais:collect -- --retain-hours 48   # keep a longer window than 24h
+ *   npm run ais:collect -- --post http://localhost:3942
  *   npm run ais:collect -- --status  # just print what is on file
+ *
+ * TWO FILES, TWO JOBS
+ *   data/vessels/tracks.json            the live STORE, read by the app at
+ *                                       runtime through /api/vessel-tracks
+ *   src/data/vessel-tracks/tracks.json  the SNAPSHOT bundled into a build,
+ *                                       and the only copy a static host serves
+ *
+ * `--post` additionally hands each new report to the app's own
+ * `POST /api/vessel-ingest`, which is the path that makes the app — not this
+ * script — the thing doing the storing. It needs the app running.
  *
  * The file keeps a rolling 24-hour window (see DEFAULT_RETAIN_HOURS), which is
  * what the map's time search covers.
@@ -32,7 +43,11 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
-const OUT = path.join(ROOT, "src/data/vessel-tracks/tracks.json");
+
+/** The app's live store — read at runtime by `/api/vessel-tracks`. Gitignored. */
+const STORE = path.join(ROOT, "data/vessels/tracks.json");
+/** The snapshot bundled into a build — the only copy a static host serves. */
+const SNAPSHOT = path.join(ROOT, "src/data/vessel-tracks/tracks.json");
 
 /** The vessels we track. MMSI is the AIS identity; IMO/name are for labels. */
 const VESSELS = [
@@ -82,11 +97,14 @@ function readKey() {
 }
 
 function loadTracks() {
-  if (!fs.existsSync(OUT)) return { version: 1, generatedAt: null, vessels: [] };
+  // Read the store first: it is the live copy. A fresh clone has no store, so
+  // seed from the committed snapshot instead of starting from nothing.
+  const source = fs.existsSync(STORE) ? STORE : SNAPSHOT;
+  if (!fs.existsSync(source)) return { version: 1, generatedAt: null, vessels: [] };
   try {
-    return JSON.parse(fs.readFileSync(OUT, "utf8"));
+    return JSON.parse(fs.readFileSync(source, "utf8"));
   } catch {
-    console.error("tracks.json is corrupt; back it up and delete it to start fresh.");
+    console.error(`${path.relative(ROOT, source)} is corrupt; back it up and delete it to start fresh.`);
     process.exit(1);
   }
 }
@@ -95,10 +113,46 @@ function saveTracks(data, retainHours) {
   prune(data, retainHours);
   data.generatedAt = new Date().toISOString();
   data.retainHours = retainHours;
-  const tmp = OUT + ".tmp";
-  fs.mkdirSync(path.dirname(OUT), { recursive: true });
-  fs.writeFileSync(tmp, JSON.stringify(data));
-  fs.renameSync(tmp, OUT); // atomic: never leaves a half-written file
+  // Two files, two jobs. The STORE is the live one the app reads at runtime
+  // through /api/vessel-tracks; the SNAPSHOT is what a build bundles, and is
+  // the only one of the two that reaches a static deploy. Writing both keeps
+  // "what the app has stored" and "what ships" from drifting apart.
+  for (const file of [STORE, SNAPSHOT]) {
+    const tmp = file + ".tmp";
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(tmp, JSON.stringify(data));
+    fs.renameSync(tmp, file); // atomic: never leaves a half-written file
+  }
+}
+
+/**
+ * Push reports to the app's ingest API.
+ *
+ * This is the "the app stored it" path: `POST /api/vessel-ingest` validates
+ * each report, dedupes on (mmsi, t) and writes the store itself. It needs the
+ * app running, which is why it is opt-in — writing the files above works with
+ * nothing else alive.
+ */
+async function postReports(baseUrl, points, vessels) {
+  const url = `${baseUrl.replace(/\/$/, "")}/api/vessel-ingest`;
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ points, vessels }),
+    });
+    const json = await res.json().catch(() => null);
+    if (!res.ok) {
+      console.error(`  ingest failed (${res.status}): ${json?.message ?? res.statusText}`);
+      return;
+    }
+    console.log(
+      `  ingest: ${json.accepted} accepted, ${json.duplicate} duplicate, ` +
+        `${json.rejected} rejected${json.pruned ? `, ${json.pruned} pruned` : ""}`
+    );
+  } catch (error) {
+    console.error(`  ingest unreachable at ${url}: ${error.message}`);
+  }
 }
 
 /**
@@ -151,24 +205,35 @@ function ensureVessel(data, v) {
   return rec;
 }
 
-async function collect({ minutes, retainHours }) {
+async function collect({ minutes, retainHours, post }) {
   const API_KEY = readKey();
   const data = loadTracks();
   const targets = new Map(VESSELS.map((v) => [v.mmsi, v]));
   let added = 0;
   let dropped = 0;
+  /** Reports added this run, for `--post`. */
+  const fresh = [];
 
   const socket = new WebSocket("wss://stream.aisstream.io/v0/stream");
   socket.binaryType = "arraybuffer";
 
-  const stop = () => {
+  const stop = async () => {
     try { socket.close(); } catch {}
     saveTracks(data, retainHours);
     const summary = data.vessels
       .map((v) => `  ${v.name} (${v.mmsi}): ${v.points.length} points`)
       .join("\n");
     console.log(`\nStopped. ${added} points added, ${dropped} ignored.`);
-    console.log(`Track file: ${path.relative(ROOT, OUT)}`);
+    console.log(`Store:    ${path.relative(ROOT, STORE)}`);
+    console.log(`Snapshot: ${path.relative(ROOT, SNAPSHOT)}`);
+    if (post && fresh.length) {
+      console.log(`\nPosting ${fresh.length} new report(s) to ${post} …`);
+      await postReports(
+        post,
+        fresh,
+        VESSELS.map((v) => ({ mmsi: v.mmsi, name: v.name, imo: v.imo }))
+      );
+    }
     if (summary) console.log(summary);
     process.exit(0);
   };
@@ -230,6 +295,7 @@ async function collect({ minutes, retainHours }) {
     }
     rec.points.push(point);
     added++;
+    fresh.push({ mmsi: rec.mmsi, ...point });
 
     const ago = Math.round((Date.now() - t) / 1000);
     console.log(
@@ -241,17 +307,26 @@ async function collect({ minutes, retainHours }) {
   socket.addEventListener("error", (e) => console.error("socket error:", e.message || e));
   socket.addEventListener("close", (e) => {
     if (e.code !== 1000 && e.code !== 1005) console.error(`socket closed unexpectedly (code ${e.code})`);
-    stop();
+    void stop();
   });
 
-  process.on("SIGINT", stop);
-  if (minutes) setTimeout(stop, minutes * 60 * 1000);
+  // `stop` saves and exits; a second Ctrl-C while a POST is in flight must not
+  // start a second save.
+  let stopping = false;
+  const stopOnce = () => {
+    if (stopping) return;
+    stopping = true;
+    void stop();
+  };
+  process.on("SIGINT", stopOnce);
+  if (minutes) setTimeout(stopOnce, minutes * 60 * 1000);
 }
 
 function status() {
   const data = loadTracks();
   if (!data.vessels.length) { console.log("No tracks recorded yet."); return; }
-  console.log(`Track file: ${path.relative(ROOT, OUT)}`);
+  console.log(`Store:      ${path.relative(ROOT, STORE)}`);
+  console.log(`Snapshot:   ${path.relative(ROOT, SNAPSHOT)}`);
   console.log(`Generated:  ${data.generatedAt || "(never)"}`);
   console.log(`Retention:  ${data.retainHours ?? DEFAULT_RETAIN_HOURS}h rolling\n`);
   for (const v of data.vessels) {
@@ -272,10 +347,15 @@ if (args.includes("--status")) status();
 else {
   const mi = args.indexOf("--minutes");
   const ri = args.indexOf("--retain-hours");
+  const pi = args.indexOf("--post");
   const retainHours = ri >= 0 ? Number(args[ri + 1]) : DEFAULT_RETAIN_HOURS;
   if (!Number.isFinite(retainHours) || retainHours <= 0) {
     console.error("--retain-hours must be a positive number of hours.");
     process.exit(1);
   }
-  collect({ minutes: mi >= 0 ? Number(args[mi + 1]) : null, retainHours });
+  collect({
+    minutes: mi >= 0 ? Number(args[mi + 1]) : null,
+    retainHours,
+    post: pi >= 0 ? String(args[pi + 1] ?? "") : null,
+  });
 }
