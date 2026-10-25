@@ -176,6 +176,15 @@ On a read-only filesystem the route answers **503 `READ_ONLY_STORE`** with a
 message naming the cause. It does not pretend the write happened, and it does
 not fall back to memory.
 
+The detection is deliberately not a list of errno values. **Vercel reports
+`ENOENT`**, not the `EROFS` one would expect — its runtime cannot create the
+directory at all, so the failure surfaces as "no such file". `storeIsWritable()`
+therefore asks the positive question (create the directory, then check it
+exists) and the route treats a failure as read-only when either the errno is in
+the known set *or* the directory is still absent. The errno is echoed back as
+`reason` so a genuine path bug would still be diagnosable rather than silently
+reported as a host limitation.
+
 ### `GET /api/vessel-tracks` — the read path
 
 `{ source: "store" | "none", generatedAt, retainHours, reportCount, vessels }`,
