@@ -139,9 +139,20 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     const code = (error as NodeJS.ErrnoException)?.code;
-    if (code === "EROFS" || code === "EACCES" || code === "EPERM") {
-      // A static host. Say so plainly rather than returning a 500 the caller
-      // has to decode — and never pretend the write happened.
+    const message = (error as Error)?.message ?? "";
+    // A static host refuses writes in several different ways depending on the
+    // runtime and the mount: EROFS on a read-only bind mount, EACCES/EPERM on a
+    // permission-denied one, and some hosts report a plain "read-only file
+    // system" with no errno at all. Match the class, not one spelling of it.
+    const readOnly =
+      code === "EROFS" ||
+      code === "EACCES" ||
+      code === "EPERM" ||
+      /read-only|readonly|EROFS/i.test(message);
+
+    if (readOnly) {
+      // Say so plainly rather than returning a 500 the caller has to decode —
+      // and never pretend the write happened.
       return json(503, {
         error: "READ_ONLY_STORE",
         message:
@@ -154,6 +165,9 @@ export async function POST(request: Request) {
     return json(500, {
       error: "INTERNAL_SERVER_ERROR",
       message: "Could not write the vessel store.",
+      // The errno is the whole diagnosis for a storage failure, and it is not
+      // sensitive — a 500 with no reason forces a redeploy just to find out.
+      reason: code ?? message.slice(0, 120),
     });
   }
 }
