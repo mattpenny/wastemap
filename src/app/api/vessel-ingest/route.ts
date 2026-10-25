@@ -6,6 +6,7 @@ import {
   mergeReports,
   prune,
   readStore,
+  storeIsWritable,
   storeReportCount,
   writeStore,
   type IngestReport,
@@ -142,13 +143,15 @@ export async function POST(request: Request) {
     const message = (error as Error)?.message ?? "";
     // A static host refuses writes in several different ways depending on the
     // runtime and the mount: EROFS on a read-only bind mount, EACCES/EPERM on a
-    // permission-denied one, and some hosts report a plain "read-only file
-    // system" with no errno at all. Match the class, not one spelling of it.
+    // permission-denied one, and Vercel's runtime reports ENOENT when the
+    // directory simply cannot be created. Match the class by asking whether the
+    // store directory exists afterwards, not by guessing at one errno.
     const readOnly =
       code === "EROFS" ||
       code === "EACCES" ||
       code === "EPERM" ||
-      /read-only|readonly|EROFS/i.test(message);
+      /read-only|readonly|EROFS/i.test(message) ||
+      !storeIsWritable();
 
     if (readOnly) {
       // Say so plainly rather than returning a 500 the caller has to decode —
@@ -159,6 +162,9 @@ export async function POST(request: Request) {
           "This deployment's filesystem is read-only, so reports cannot be stored here. " +
           "Run the app on a writable machine (locally, or the NAS) to store vessel data; " +
           "a static host keeps serving the snapshot bundled at build time.",
+        // Kept for diagnosis: if this is ever NOT a host limitation, the errno
+        // is the only thing that will say so.
+        reason: code ?? message.slice(0, 120),
       });
     }
     console.error("[api/vessel-ingest] Failed to store reports:", error);

@@ -109,6 +109,25 @@ export function writeStore(store: VesselStore): void {
 }
 
 /**
+ * Whether this host can actually store anything.
+ *
+ * Asked as a positive question — create the directory, then look — rather than
+ * by guessing at errno values. A read-only host is not consistent about which
+ * one it raises: Vercel's runtime reports `ENOENT` when the directory cannot be
+ * created, a plain read-only bind mount reports `EROFS`, a permission-denied
+ * one `EACCES`. Checking whether the directory exists afterwards answers the
+ * real question regardless of which spelling came back.
+ */
+export function storeIsWritable(): boolean {
+  try {
+    fs.mkdirSync(STORE_DIR, { recursive: true });
+    return fs.existsSync(STORE_DIR);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Drop points older than the retention window.
  *
  * The cutoff is anchored to each vessel's **newest point**, not to `Date.now()`.
