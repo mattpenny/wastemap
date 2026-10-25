@@ -212,6 +212,27 @@ const DICT = {
     "Published throughput, design capacity and facility details are behind Detail.",
     "公布處理量、設計處理量及設施詳情收於「詳細資料」內。",
   ],
+
+  // Vessel overlay. Off by default — this is a map of facilities first, so the
+  // two ships in the harbour are something the user asks for rather than
+  // something that lands on the map uninvited.
+  vessels: ["Vessels", "船隻"],
+  vesselsHint: [
+    "Choose which vessels to show on the map",
+    "選擇要在地圖上顯示的船隻",
+  ],
+  vesselsNone: ["No vessel shown", "未顯示船隻"],
+  vesselsShowAll: ["Show all", "全部顯示"],
+  vesselRoute: ["Last sailing route (AIS)", "上次航行航線 (AIS)"],
+  vesselRouteNeedsVessel: [
+    "Switch a vessel on first — the route is drawn only for the vessels you selected.",
+    "請先開啟船隻：航線只會為你選取的船隻繪畫。",
+  ],
+  timeSearch: ["Time search", "時間搜尋"],
+  timeFrom: ["From", "由"],
+  timeTo: ["To", "至"],
+  timeReset: ["Whole recording", "整段記錄"],
+  timeEmpty: ["No AIS reports in this window", "此時間範圍內沒有 AIS 匯報"],
 } as const;
 
 export type DictKey = keyof typeof DICT;

@@ -22,16 +22,14 @@ import { t, type Lang } from "@/lib/i18n";
 import { prefetchUnderlayTiles } from "@/lib/prefetchBasemap";
 import {
   VESSEL_TRACKS,
-  clipTrack,
-  positionAtTime,
+  sampleAt,
   sampleTrack,
-  trackDurationMs,
+  trackSpan,
   trailBefore,
   vesselColor,
-  type VesselSample,
-  type VesselTrack,
+  type VesselTimeMark,
 } from "@/lib/vesselTracks";
-import { formatLocalTime, formatNumber } from "@/lib/utils";
+import { formatNumber } from "@/lib/utils";
 import {
   HK_BEARING,
   HK_CENTER,
@@ -73,21 +71,20 @@ export interface WasteMap3DProps {
   /** When true, show a "no facilities" hint instead of an empty map. */
   emptyHint?: boolean;
   /**
-   * Animate the recorded AIS routes. The vessel markers themselves are always
-   * drawn whenever a track exists — this switch adds the route, the wake and
-   * the playback on top of them.
+   * Animate the recorded AIS routes. Only meaningful for vessels the user has
+   * switched on: this adds the route, its 10-minute marks, the wake and the
+   * playback on top of the markers.
    */
   showVesselRoutes?: boolean;
   /**
-   * Which vessels to draw at all, by MMSI. Empty by default: the vessels are an
-   * optional layer on a map of facilities, so the user opts in rather than
-   * having two boats appear over the harbour unasked.
+   * MMSIs of the vessels the user has chosen to display. Empty by default —
+   * the vessels are off until asked for, because a waste map is primarily a
+   * map of facilities and two ships in the harbour are a detail on top of it.
    */
-  visibleVessels?: string[];
+  visibleVesselMmsis?: string[];
   /**
-   * Clip every vessel track to this window. `null` means the whole recording.
-   * Bounds the route, the 10-minute dots and the marker's position, so moving
-   * the window end earlier answers "where was the ship at 10:40".
+   * The window the time search is scoped to, in epoch milliseconds. Null means
+   * "the whole recording", which the collector already caps at 24 hours.
    */
   vesselWindow?: { from: number; to: number } | null;
   /**
@@ -163,10 +160,8 @@ function pinFor(hex: string): string {
 const PIN_ICON_SIZE = { width: 64, height: 80, anchorX: 32, anchorY: 80 };
 
 /**
- * Recorded vessel routes.
- *
- * The per-vessel colours live in `vesselTracks.ts` rather than here, because the
- * legend's picker has to draw the same swatch as the marker it switches on.
+ * Vessel colours come from `vesselTracks.ts`: the map and the vessel switch in
+ * the toolbar must agree on them, so there is one table, not two.
  */
 
 /**
@@ -197,6 +192,21 @@ function vesselIconFor(hex: string): string {
 const VESSEL_ICON_SIZE = { width: 64, height: 64, anchorX: 32, anchorY: 32 };
 
 /**
+ * Local wall-clock time for the vessel timeline, e.g. "24/10 20:43".
+ *
+ * Local rather than UTC on purpose: the time search is a `datetime-local`
+ * field, whose value is local by definition. A dot reporting UTC beside a
+ * search box reading local would have the user hunting a four-hour gap that
+ * does not exist.
+ */
+function formatVesselTime(ms: number): string {
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+
+/**
  * Vessel marker size in screen pixels.
  *
  * Matched to PIN_SIZE_PX on purpose: the facility pin and the vessel marker are
@@ -224,29 +234,28 @@ interface VesselMarker {
   sog: number | null;
 }
 
+/** A dot on the route, sampled every VESSEL_MARK_STEP_MS. */
+interface VesselDot extends VesselTimeMark {
+  name: string;
+  mmsi: string;
+}
+
+/**
+ * Spacing of the dots along a route.
+ *
+ * The user asks for a readable time axis over the recording rather than a dot
+ * per report, which would bunch up wherever the ship reported twice in a
+ * minute and vanish where it went quiet. 10 minutes is coarse enough to stay
+ * legible over a 24-hour window and fine enough to read a harbour crossing.
+ */
+const VESSEL_MARK_STEP_MS = 10 * 60 * 1000;
+
 /**
  * How much of the recorded track the wake behind the vessel covers.
  * A barge reports every few minutes, so the trail is what makes the motion
  * read as continuous rather than as a dot jumping between reports.
  */
 const VESSEL_TRAIL_MS = 12 * 60 * 1000;
-
-/**
- * Spacing of the dots drawn along the route.
- *
- * Ten minutes is the interval a reader can hold in their head — it divides the
- * hour marks cleanly and, on a two-hour passage, still leaves a dozen or so
- * dots rather than a solid line of them. Each dot is an interpolated position,
- * not a measurement, so the tooltip says "10:40" rather than claiming a report.
- */
-const VESSEL_SAMPLE_STEP_MS = 10 * 60 * 1000;
-
-/** A 10-minute dot: a sample plus the identity the tooltip needs. */
-interface VesselSampleHit extends VesselSample {
-  name: string;
-  mmsi: string;
-  hex: string;
-}
 
 /**
  * Playback speed. A real West Kowloon to Shek Kwu Chau run takes one to two
@@ -279,7 +288,7 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
     visibleCategories,
     emptyHint = false,
     showVesselRoutes = false,
-    visibleVessels,
+    visibleVesselMmsis,
     vesselWindow = null,
     onUserMapInteract,
   },
@@ -298,13 +307,35 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
   const vesselTimeRef = useRef(0);
 
   /**
-   * The current vessel selection and window, for the imperative
-   * `focusVessels()` handle. That handle is built once — it closes over
-   * `facilities` only — so it cannot read these props directly, and rebuilding
-   * it on every tick of the picker would churn the ref the page holds.
+   * The vessels actually being drawn, and the stretch of each track the time
+   * search has selected.
+   *
+   * Computed once per selection change rather than per frame: the animation
+   * clock pushes layers at 30fps, and resampling a 24-hour window into 10-minute
+   * marks on every one of those frames would be pure waste. Nothing here moves
+   * with the clock — only the marker does.
    */
-  const vesselViewRef = useRef({ visibleVessels, vesselWindow });
-  vesselViewRef.current = { visibleVessels, vesselWindow };
+  const vesselGeometry = useMemo(() => {
+    const visible = new Set(visibleVesselMmsis ?? []);
+    return VESSEL_TRACKS.filter((track) => visible.has(track.mmsi)).map((track) => {
+      const span = trackSpan(track);
+      const lo = vesselWindow ? Math.max(span.from, vesselWindow.from) : span.from;
+      const hi = vesselWindow ? Math.min(span.to, vesselWindow.to) : span.to;
+      return {
+        track,
+        lo,
+        hi,
+        // An empty window is a real state (the search selects a quiet stretch),
+        // not an error — it just means no route and no dots.
+        marks: hi > lo ? sampleTrack(track, lo, hi, VESSEL_MARK_STEP_MS) : [],
+      };
+    });
+  }, [visibleVesselMmsis, vesselWindow]);
+
+  // The imperative handle is memoised on `facilities`, so it would capture a
+  // stale selection. It reads this ref instead.
+  const vesselGeometryRef = useRef(vesselGeometry);
+  vesselGeometryRef.current = vesselGeometry;
 
   // The mount-once effect must not capture a stale callback, so keep the
   // latest selection handler in a ref.
@@ -345,7 +376,7 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
   const [hovered, setHovered] = useState<
     | { facility: FacilityProperties; x: number; y: number }
     | { vessel: VesselMarker; x: number; y: number }
-    | { sample: VesselSampleHit; x: number; y: number }
+    | { dot: VesselDot; x: number; y: number }
     | null
   >(null);
 
@@ -354,31 +385,6 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
     () => facilities.filter((f) => visibleCategories.includes(f.category)),
     [facilities, visibleCategories]
   );
-
-  /**
-   * The vessel tracks to draw, already clipped to the chosen window.
-   *
-   * `shown` is the clipped track, or the whole recording when no window is set
-   * — the layer builder and the marker both read it, so the marker lands on the
-   * window's end rather than on the last report of the day. A window that falls
-   * outside a track drops that vessel entirely instead of drawing a stale boat
-   * at a position that belongs to another hour.
-   */
-  const drawnVessels = useMemo(() => {
-    const ids = visibleVessels ?? [];
-    if (ids.length === 0) return [];
-    const out: { track: VesselTrack; shown: VesselTrack }[] = [];
-    for (const track of VESSEL_TRACKS) {
-      if (!ids.includes(track.mmsi)) continue;
-      if (!vesselWindow) {
-        out.push({ track, shown: track });
-        continue;
-      }
-      const clipped = clipTrack(track, vesselWindow.from, vesselWindow.to);
-      if (clipped) out.push({ track, shown: clipped });
-    }
-    return out;
-  }, [visibleVessels, vesselWindow]);
 
   const maxPublishedThroughput = useMemo(
     () =>
@@ -646,24 +652,24 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
     // ------------------------------------------------------------------
     // Vessels
     // ------------------------------------------------------------------
-    // Nothing vessel-related is drawn until the user picks a vessel: they are
-    // an optional layer on a map of facilities, not its subject.
+    // Three switches, each with one job:
     //
-    // Once picked, a vessel always gets a marker — sitting at the end of the
-    // chosen window, which is its last report when no window is set. The
-    // route, its wake, the ten-minute dots and the playback are the extra that
-    // the legend switch adds.
+    //  1. `visibleVesselMmsis` — which vessels exist on the map at all.
+    //     Empty by default: this is a map of facilities, and the ships are an
+    //     overlay the user asks for.
+    //  2. `vesselWindow` — which stretch of the recording the time search has
+    //     selected.
+    //  3. `showVesselRoutes` — whether to draw the route, its marks, its wake
+    //     and the playback, on top of the marker that says where the vessel is.
     //
     // Everything is driven by the recorded AIS reports — see `vesselTracks.ts`.
-    const vesselLayers = drawnVessels.flatMap(({ track, shown }) => {
+    const vesselLayers = vesselGeometry.flatMap(({ track, lo, hi, marks }) => {
       const color = vesselColor(track.mmsi);
-      const points = shown.points;
-      const first = points[0];
+      const points = track.points;
       const last = points[points.length - 1];
-      const duration = trackDurationMs(shown);
 
-      // The marker. At the end of the window; riding the interpolated position
-      // while the route plays back.
+      // The marker. Sitting on the last report by default; riding the
+      // interpolated position while the route plays back.
       const marker: VesselMarker = {
         position: [last.lng, last.lat],
         course: last.cog,
@@ -673,39 +679,38 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
         sog: last.sog,
       };
       let routePath: [number, number][] | null = null;
-      let reportDots: [number, number][] | null = null;
+      let dots: VesselDot[] | null = null;
       let wake: [number, number][] | null = null;
-      let samples: VesselSampleHit[] = [];
 
-      if (showVesselRoutes && duration > 0) {
-        routePath = points.map((p) => [p.lng, p.lat] as [number, number]);
-        // A dot on every recorded report, so the line between two reports
-        // reads as interpolation rather than as a surveyed course.
-        reportDots = routePath;
+      if (showVesselRoutes && hi > lo) {
+        // The line's vertices are the real reports inside the window, closed
+        // off at both edges by interpolation — so narrowing the time search
+        // shortens the line without inventing a bend in it.
+        const path: [number, number][] = [];
+        const startAt = sampleAt(track, lo);
+        if (startAt) path.push(startAt.position);
+        for (const p of points) {
+          if (p.t > lo && p.t < hi) path.push([p.lng, p.lat]);
+        }
+        const endAt = sampleAt(track, hi);
+        if (endAt) path.push(endAt.position);
+        if (path.length >= 2) routePath = path;
 
-        // The ten-minute ticks: interpolated positions on a wall-clock grid,
-        // each carrying its own identity so the tooltip can name the vessel
-        // without a second lookup at pick time.
-        samples = sampleTrack(shown, first.t, last.t, VESSEL_SAMPLE_STEP_MS).map((s) => ({
-          ...s,
-          name: track.name,
-          mmsi: track.mmsi,
-          hex: color.hex,
-        }));
+        // A dot every 10 minutes, each carrying the reports it sits between.
+        dots = marks.map((m) => ({ ...m, name: track.name, mmsi: track.mmsi }));
 
-        // Each vessel runs on its own clock: the tracks have very different
-        // lengths (one passage vs. a few minutes of manoeuvring), and a
-        // shared clock would make the short one vanish for most of the loop.
-        const now = vesselTimeRef.current % duration;
-        const at = positionAtTime(shown, first.t + now);
+        // Playback loops over the selected window, not over the whole track.
+        const windowMs = hi - lo;
+        const now = vesselTimeRef.current % windowMs;
+        const at = sampleAt(track, lo + now);
         // A barge reports only every few minutes, so the wake is what makes
         // the motion read as continuous rather than as a dot hopping between
         // reports.
-        wake = trailBefore(shown, first.t + now, VESSEL_TRAIL_MS);
+        wake = trailBefore(track, lo + now, VESSEL_TRAIL_MS);
         if (at) {
           marker.position = at.position;
           marker.course = at.course;
-          marker.t = first.t + now;
+          marker.t = lo + now;
           marker.sog = at.sog;
         }
       }
@@ -741,43 +746,23 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
               }),
             ]
           : []),
-        ...(reportDots
+        ...(dots
           ? [
-              // The vessel's own AIS reports. Small, but they are the only
-              // part of the line that is measured rather than interpolated.
-              new ScatterplotLayer<[number, number]>({
-                id: `vessel-reports-${track.mmsi}`,
-                data: reportDots,
-                getPosition: (d) => d,
+              // The 10-minute marks. Pickable so each one can state its time —
+              // and, just as importantly, which two reports it was
+              // interpolated between.
+              new ScatterplotLayer<VesselDot>({
+                id: `vessel-dot-${track.mmsi}`,
+                data: dots,
+                getPosition: (d) => d.position,
                 getFillColor: [...color.rgb, 235],
                 getLineColor: [255, 255, 255, 200],
                 stroked: true,
-                getRadius: 2.4,
+                getRadius: 2.6,
                 radiusUnits: "pixels",
                 lineWidthUnits: "pixels",
-                getLineWidth: 0.8,
-              }),
-            ]
-          : []),
-        ...(samples.length
-          ? [
-              // The ten-minute ticks. Deliberately larger and ringed than the
-              // report dots, because these are the ones you are meant to aim
-              // at: the only pickable thing on the route.
-              new ScatterplotLayer<VesselSampleHit>({
-                id: `vessel-sample-${track.mmsi}`,
-                data: samples,
-                getPosition: (d) => d.position,
-                getFillColor: [...color.rgb, 255],
-                getLineColor: [255, 255, 255, 235],
-                stroked: true,
-                getRadius: 4.2,
-                radiusUnits: "pixels",
-                lineWidthUnits: "pixels",
-                getLineWidth: 1.4,
+                getLineWidth: 0.9,
                 pickable: true,
-                autoHighlight: true,
-                highlightColor: [255, 255, 255, 130],
               }),
             ]
           : []),
@@ -810,7 +795,7 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
     elevationScale,
     landfillScale,
     showVesselRoutes,
-    drawnVessels,
+    vesselGeometry,
   ]);
 
   // ------------------------------------------------------------------
@@ -1171,8 +1156,10 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
   // back here. Only deck.gl props are pushed — React never re-renders, so the
   // 30fps clock costs nothing in the component tree.
   useEffect(() => {
-    if (!showVesselRoutes || VESSEL_TRACKS.length === 0) return;
-    if (Math.max(...VESSEL_TRACKS.map(trackDurationMs)) <= 0) return;
+    if (!showVesselRoutes || vesselGeometry.length === 0) return;
+    // Nothing selected in the time search means nothing to play back; leave
+    // the clock stopped rather than spinning a frame loop over an empty window.
+    if (vesselGeometry.every((g) => g.hi <= g.lo)) return;
 
     let frame = 0;
     let last = performance.now();
@@ -1192,7 +1179,7 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
 
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
-  }, [showVesselRoutes, pushLayers]);
+  }, [showVesselRoutes, pushLayers, vesselGeometry]);
 
   // ------------------------------------------------------------------
   // Swap basemap. For the official map the language is part of the style
@@ -1249,38 +1236,35 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
       },
       focusVessels: () => {
         const map = mapRef.current;
-        // The selection and window live in props, but this handle is built
-        // once — read them through the ref rather than capturing a stale copy.
-        const { visibleVessels: ids, vesselWindow: win } = vesselViewRef.current;
-
-        // Frame what is actually on screen: the picked vessels, clipped to the
-        // window. Framing the whole day when one 40-minute slice is drawn would
-        // fly the camera out to a route nobody asked to see.
-        const drawn: VesselTrack[] = [];
-        for (const track of VESSEL_TRACKS) {
-          if (!ids?.includes(track.mmsi)) continue;
-          if (!win) {
-            drawn.push(track);
-            continue;
-          }
-          const clipped = clipTrack(track, win.from, win.to);
-          if (clipped) drawn.push(clipped);
-        }
-        if (!map || drawn.length === 0) return;
-
-        // Bounding box of every drawn point, with a little sea around it.
+        // Only the vessels the user has switched on. Framing a hidden ship
+        // would fly the camera to empty water and leave the user wondering
+        // what the map was looking at.
+        const visible = vesselGeometryRef.current;
+        if (!map || visible.length === 0) return;
+        // Bounding box of every point in the selected window, with a little
+        // sea around it. `lo`/`hi` are already clipped to the recording, so a
+        // narrow time search frames just that stretch.
         let minLng = Infinity;
         let minLat = Infinity;
         let maxLng = -Infinity;
         let maxLat = -Infinity;
-        for (const track of drawn) {
+        for (const { track, lo, hi } of visible) {
+          const startAt = sampleAt(track, lo);
+          const endAt = sampleAt(track, hi);
+          const corners: [number, number][] = [];
+          if (startAt) corners.push(startAt.position);
+          if (endAt) corners.push(endAt.position);
           for (const p of track.points) {
-            if (p.lng < minLng) minLng = p.lng;
-            if (p.lng > maxLng) maxLng = p.lng;
-            if (p.lat < minLat) minLat = p.lat;
-            if (p.lat > maxLat) maxLat = p.lat;
+            if (p.t >= lo && p.t <= hi) corners.push([p.lng, p.lat]);
+          }
+          for (const [lng, lat] of corners) {
+            if (lng < minLng) minLng = lng;
+            if (lng > maxLng) maxLng = lng;
+            if (lat < minLat) minLat = lat;
+            if (lat > maxLat) maxLat = lat;
           }
         }
+        if (!Number.isFinite(minLng) || !Number.isFinite(minLat)) return;
         const spanLng = maxLng - minLng;
         const spanLat = maxLat - minLat;
         const pad = 0.25; // ~a quarter of the extent, on every side
@@ -1310,11 +1294,10 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
       setHovered(null);
       return;
     }
-    // Vessel markers and route dots share the overlay with the facility
-    // layers, so tell them apart by the layer that produced the pick.
-    if (info.layer?.id?.startsWith("vessel-sample-")) {
-      const s = info.object as VesselSampleHit;
-      setHovered({ sample: s, x: info.x, y: info.y });
+    // Vessel markers share the overlay with the facility layers, so tell them
+    // apart by the layer that produced the pick.
+    if (info.layer?.id?.startsWith("vessel-dot-")) {
+      setHovered({ dot: info.object as VesselDot, x: info.x, y: info.y });
       return;
     }
     if (info.layer?.id?.startsWith("vessel-icon-")) {
@@ -1330,20 +1313,17 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
     (info: PickingInfo) => {
       if (!info.object) return;
 
-      // A ten-minute dot is a read-out, not a destination: hovering is the
-      // whole interaction, so a click on one should do nothing at all.
-      if (info.layer?.id?.startsWith("vessel-sample-")) return;
-
-      // Vessel markers share this click handler with the facility layers, but
-      // they are NOT facilities: a `VesselMarker` has no `id`, `category` or
-      // `metrics`, and the drawer dereferences all three. Passing one through
-      // crashed the whole page, so a vessel click is handled here instead —
-      // clear any open site, then frame the ship.
-      if (info.layer?.id?.startsWith("vessel-icon-")) {
-        const vessel = info.object as VesselMarker;
+      // Vessel markers and their 10-minute marks share this click handler with
+      // the facility layers, but they are NOT facilities: a `VesselMarker` has
+      // no `id`, `category` or `metrics`, and the drawer dereferences all
+      // three. Passing one through crashed the whole page, so anything from a
+      // `vessel-` layer is handled here instead — clear any open site, then
+      // frame the point that was clicked.
+      if (info.layer?.id?.startsWith("vessel-")) {
+        const { position } = info.object as VesselMarker | VesselDot;
         onSelectFacility(null);
         mapRef.current?.flyTo({
-          center: vessel.position,
+          center: position,
           zoom: 14.5,
           duration: 1200,
           essential: true,
@@ -1394,14 +1374,14 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
           </p>
           <p className="mt-0.5 text-[length:calc(10px*var(--fs))] text-white/45">
             {lang === "zh" ? "AIS 位置匯報" : "AIS report"}{" "}
-            {formatLocalTime(hovered.vessel.t)}
+            {formatVesselTime(hovered.vessel.t)}
             {hovered.vessel.sog != null && ` · ${hovered.vessel.sog.toFixed(1)} kn`}
           </p>
         </div>
       )}
 
-      {/* Cursor-following tooltip — ten-minute route dot */}
-      {hovered && !selectedId && "sample" in hovered && (
+      {/* Cursor-following tooltip — 10-minute mark on the route */}
+      {hovered && !selectedId && "dot" in hovered && (
         <div
           className="pointer-events-none absolute z-30 hidden max-w-[260px] -translate-y-full rounded-xl border border-white/15 bg-slate-900/95 px-3 py-2.5 shadow-2xl backdrop-blur-md sm:block"
           style={{
@@ -1409,19 +1389,33 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
             top: Math.max(hovered.y - 12, 90),
           }}
         >
-          <p className="text-[length:calc(13px*var(--fs))] font-semibold leading-tight text-white">
-            {hovered.sample.name}
+          <p className="text-[length:calc(15px*var(--fs))] font-semibold leading-tight tabular-nums text-white">
+            {formatVesselTime(hovered.dot.t)}
           </p>
           <p className="mt-0.5 text-[length:calc(10px*var(--fs))] uppercase tracking-wider text-white/45">
-            {lang === "zh" ? "航線位置 · 每 10 分鐘" : "Route position · every 10 min"}
+            {hovered.dot.name}
+            {hovered.dot.mmsi ? ` · MMSI ${hovered.dot.mmsi}` : ""}
           </p>
           <p className="mt-1.5 text-[length:calc(10px*var(--fs))] tabular-nums text-white/60">
-            {hovered.sample.position[1].toFixed(5)}, {hovered.sample.position[0].toFixed(5)}
+            {hovered.dot.position[1].toFixed(5)}, {hovered.dot.position[0].toFixed(5)}
           </p>
-          <p className="mt-0.5 text-[length:calc(10px*var(--fs))] tabular-nums text-white/45">
-            {formatLocalTime(hovered.sample.t)}
-            {hovered.sample.sog != null && ` · ${hovered.sample.sog.toFixed(1)} kn`}
+          {/* Say which two reports this position sits between. Without it the
+              dot implies the ship was observed every ten minutes, which it
+              was not — the reports can be forty minutes apart. */}
+          <p className="mt-0.5 text-[length:calc(10px*var(--fs))] leading-snug text-white/45">
+            {hovered.dot.fromT === hovered.dot.t
+              ? lang === "zh"
+                ? "AIS 位置匯報"
+                : "AIS report"
+              : lang === "zh"
+                ? `介乎 ${formatVesselTime(hovered.dot.fromT)} 及 ${formatVesselTime(hovered.dot.toT)} 兩次匯報之間（內插）`
+                : `Between reports at ${formatVesselTime(hovered.dot.fromT)} and ${formatVesselTime(hovered.dot.toT)} (interpolated)`}
           </p>
+          {hovered.dot.sog != null && (
+            <p className="mt-0.5 text-[length:calc(10px*var(--fs))] tabular-nums text-white/45">
+              {hovered.dot.sog.toFixed(1)} kn
+            </p>
+          )}
         </div>
       )}
 

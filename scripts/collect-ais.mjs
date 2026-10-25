@@ -17,8 +17,11 @@
  * USAGE
  *   npm run ais:collect              # collect until Ctrl-C
  *   npm run ais:collect -- --minutes 90
- *   npm run ais:collect -- --retain-hours 24   # history to keep (default 24)
+ *   npm run ais:collect -- --retain-hours 48   # keep a longer window than 24h
  *   npm run ais:collect -- --status  # just print what is on file
+ *
+ * The file keeps a rolling 24-hour window (see DEFAULT_RETAIN_HOURS), which is
+ * what the map's time search covers.
  *
  * Requires AISSTREAM_API_KEY in `.env` (gitignored; never committed).
  */
@@ -54,14 +57,13 @@ const MIN_MOVE_M = 5;
 const MAX_AGE_MS = 10 * 60 * 1000;
 
 /**
- * How much history the file keeps. The map's time search offers a window inside
- * this, so the two have to agree — `VESSEL_RETENTION_MS` in
- * `src/lib/vesselTracks.ts` is the same number, and it is what the picker uses
- * to refuse a window the data cannot cover.
+ * How much history the track file keeps, in hours.
  *
- * Pruning happens on save, not on load, so a collection run never silently
- * throws away the file it just read. A day of two moored barges is only a few
- * dozen points, but an unattended run would otherwise grow without bound.
+ * The map offers a 24-hour time search, so the file holds a rolling 24-hour
+ * window: every save drops anything older. That is a real consequence, not a
+ * detail — if collection is not re-run, the file ages out and the map goes
+ * back to showing no vessels once the newest report is a day old. Retention is
+ * a flag so a longer recording can be kept deliberately.
  */
 const DEFAULT_RETAIN_HOURS = 24;
 
@@ -89,24 +91,40 @@ function loadTracks() {
   }
 }
 
-function saveTracks(data, retainHours = DEFAULT_RETAIN_HOURS) {
+function saveTracks(data, retainHours) {
+  prune(data, retainHours);
   data.generatedAt = new Date().toISOString();
+  data.retainHours = retainHours;
   const tmp = OUT + ".tmp";
   fs.mkdirSync(path.dirname(OUT), { recursive: true });
   fs.writeFileSync(tmp, JSON.stringify(data));
   fs.renameSync(tmp, OUT); // atomic: never leaves a half-written file
 }
 
-/** Drop points older than the retention window. Returns how many went. */
-function pruneOld(data, retainHours) {
-  const cutoff = Date.now() - retainHours * 60 * 60 * 1000;
-  let dropped = 0;
+/**
+ * Drop points outside the rolling retention window.
+ *
+ * Anchored to the newest recorded point rather than to `Date.now()`. If it were
+ * anchored to now, simply opening the collector after a week would delete the
+ * whole recording before the first new report arrived — and a stationary
+ * vessel can go an hour without adding anything. Anchoring to the newest point
+ * keeps the most recent 24 hours of *data* intact and only starts expiring
+ * once newer reports come in.
+ */
+function prune(data, retainHours) {
+  const cutoff = (v) => {
+    const newest = v.points.length ? v.points[v.points.length - 1].t : null;
+    if (newest === null) return 0;
+    return newest - retainHours * 3600 * 1000;
+  };
   for (const v of data.vessels) {
-    const before = v.points.length;
-    v.points = v.points.filter((p) => p.t >= cutoff);
-    dropped += before - v.points.length;
+    const c = cutoff(v);
+    if (v.points.length && v.points[0].t < c) {
+      const before = v.points.length;
+      v.points = v.points.filter((p) => p.t >= c);
+      console.log(`  ${v.name}: dropped ${before - v.points.length} point(s) older than ${retainHours}h`);
+    }
   }
-  return dropped;
 }
 
 function distM(a, b) {
@@ -145,15 +163,11 @@ async function collect({ minutes, retainHours }) {
 
   const stop = () => {
     try { socket.close(); } catch {}
-    const pruned = pruneOld(data, retainHours);
     saveTracks(data, retainHours);
     const summary = data.vessels
       .map((v) => `  ${v.name} (${v.mmsi}): ${v.points.length} points`)
       .join("\n");
-    console.log(
-      `\nStopped. ${added} points added, ${dropped} ignored, ${pruned} pruned ` +
-        `(older than ${retainHours}h).`
-    );
+    console.log(`\nStopped. ${added} points added, ${dropped} ignored.`);
     console.log(`Track file: ${path.relative(ROOT, OUT)}`);
     if (summary) console.log(summary);
     process.exit(0);
@@ -238,7 +252,8 @@ function status() {
   const data = loadTracks();
   if (!data.vessels.length) { console.log("No tracks recorded yet."); return; }
   console.log(`Track file: ${path.relative(ROOT, OUT)}`);
-  console.log(`Generated:  ${data.generatedAt || "(never)"}\n`);
+  console.log(`Generated:  ${data.generatedAt || "(never)"}`);
+  console.log(`Retention:  ${data.retainHours ?? DEFAULT_RETAIN_HOURS}h rolling\n`);
   for (const v of data.vessels) {
     if (!v.points.length) { console.log(`${v.name} (${v.mmsi}): no points`); continue; }
     const first = new Date(v.points[0].t);
@@ -257,8 +272,10 @@ if (args.includes("--status")) status();
 else {
   const mi = args.indexOf("--minutes");
   const ri = args.indexOf("--retain-hours");
-  collect({
-    minutes: mi >= 0 ? Number(args[mi + 1]) : null,
-    retainHours: ri >= 0 ? Number(args[ri + 1]) : DEFAULT_RETAIN_HOURS,
-  });
+  const retainHours = ri >= 0 ? Number(args[ri + 1]) : DEFAULT_RETAIN_HOURS;
+  if (!Number.isFinite(retainHours) || retainHours <= 0) {
+    console.error("--retain-hours must be a positive number of hours.");
+    process.exit(1);
+  }
+  collect({ minutes: mi >= 0 ? Number(args[mi + 1]) : null, retainHours });
 }

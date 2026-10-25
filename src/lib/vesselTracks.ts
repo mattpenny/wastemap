@@ -99,44 +99,27 @@ export const VESSEL_TRACKS_GENERATED_AT: string | null = file.generatedAt ?? nul
 /**
  * One colour per tracked vessel.
  *
- * Shared by the map and the legend/picker on purpose: the swatch in the picker
- * has to be the colour of the marker it turns on, and two copies of this table
- * would eventually disagree. The hues sit outside the facility category palette
- * (red / green / emerald / amber / violet) so a boat is never mistaken for a
- * landfill.
+ * Lives here rather than in the map component because two places need it: the
+ * map draws the marker and route with it, and the vessel switch beside the
+ * font control lists the same vessels. They must not drift — a picker swatch
+ * that does not match the route it selects is worse than no swatch.
+ *
+ * The hues deliberately avoid the facility category colours (red / green /
+ * emerald / amber / violet) so a ship can never be mistaken for a site.
  */
-export const VESSEL_COLORS: Record<string, { hex: string; rgb: [number, number, number] }> = {
+export const VESSEL_COLORS: Record<
+  string,
+  { hex: string; rgb: [number, number, number] }
+> = {
   "477997242": { hex: "#38bdf8", rgb: [56, 189, 248] }, // NGON SHUEN II
   "477997306": { hex: "#f472b6", rgb: [244, 114, 182] }, // LAI WAN II
 };
+
 const VESSEL_COLOR_FALLBACK = { hex: "#e2e8f0", rgb: [226, 232, 240] };
 
-/** Colour for a vessel, falling back to a neutral one for an unknown MMSI. */
 export function vesselColor(mmsi: string) {
   return VESSEL_COLORS[mmsi] ?? VESSEL_COLOR_FALLBACK;
 }
-
-/**
- * How much history the project keeps. The collector prunes older points on
- * every save, so this is the contract for the whole app: the time search can
- * never offer a window wider than this, and nothing here assumes more.
- */
-export const VESSEL_RETENTION_MS = 24 * 60 * 60 * 1000;
-
-/**
- * The full recorded span across every track, or null when nothing is recorded.
- * Used to bound the time search — offering a window the data cannot cover would
- * just produce an empty map with no explanation.
- */
-export const VESSEL_DATA_SPAN: { from: number; to: number } | null = (() => {
-  let from = Infinity;
-  let to = -Infinity;
-  for (const track of VESSEL_TRACKS) {
-    from = Math.min(from, track.points[0].t);
-    to = Math.max(to, track.points[track.points.length - 1].t);
-  }
-  return Number.isFinite(from) && to > from ? { from, to } : null;
-})();
 
 /** Total recorded duration of a track, in milliseconds. */
 export function trackDurationMs(track: VesselTrack): number {
@@ -144,15 +127,36 @@ export function trackDurationMs(track: VesselTrack): number {
   return points[points.length - 1].t - points[0].t;
 }
 
+/** First and last recorded report of a track, in epoch milliseconds. */
+export function trackSpan(track: VesselTrack): { from: number; to: number } {
+  const { points } = track;
+  return { from: points[0].t, to: points[points.length - 1].t };
+}
+
 /**
- * Position and course at an arbitrary moment, interpolated between the two
- * recorded reports that bracket it. Returns null outside the recorded span —
- * the animation never extrapolates past what the ship actually reported.
+ * A position at an arbitrary moment, together with the two recorded reports it
+ * was interpolated between.
+ *
+ * The bracket matters: a vessel reports every few minutes at best, so most
+ * moments on the timeline fall between two reports. Anything presenting a
+ * position at a chosen time has to be able to say which two measurements it
+ * came from rather than implying the ship was observed there.
  */
-export function positionAtTime(
-  track: VesselTrack,
-  timeMs: number,
-): { position: [number, number]; course: number | null; sog: number | null } | null {
+export interface VesselSample {
+  position: [number, number];
+  course: number | null;
+  sog: number | null;
+  /** Timestamp of the recorded report at or before the sample. */
+  fromT: number;
+  /** Timestamp of the recorded report at or after it (equals `fromT` when exact). */
+  toT: number;
+}
+
+/**
+ * Sample a track at an arbitrary moment. Returns null outside the recorded
+ * span — the timeline never extrapolates past what the ship actually reported.
+ */
+export function sampleAt(track: VesselTrack, timeMs: number): VesselSample | null {
   const { points } = track;
   if (points.length < 2) return null;
   if (timeMs < points[0].t || timeMs > points[points.length - 1].t) return null;
@@ -176,94 +180,75 @@ export function positionAtTime(
     position: [a.lng + (b.lng - a.lng) * f, a.lat + (b.lat - a.lat) * f],
     course: a.cog ?? b.cog ?? null,
     sog: a.sog ?? b.sog ?? null,
+    fromT: a.t,
+    toT: b.t,
   };
 }
 
 /**
- * One evenly spaced sample along a track, used for the 10-minute dots.
- *
- * `position` is interpolated, exactly like the playback clock — a sample is
- * "where the vessel was at 10:40", not a new measurement. The `t` it carries is
- * what the tooltip reports, so the dot never claims to be an AIS report.
+ * Position and course at an arbitrary moment, interpolated between the two
+ * recorded reports that bracket it. Returns null outside the recorded span —
+ * the animation never extrapolates past what the ship actually reported.
  */
-export interface VesselSample {
-  t: number;
-  position: [number, number];
-  sog: number | null;
-  course: number | null;
-}
-
-/**
- * The part of a track inside [fromMs, toMs], with interpolated endpoints.
- *
- * The ends are interpolated rather than snapped to the nearest report so the
- * route covers exactly the window the user asked for. Interior points are the
- * real AIS reports, untouched. Returns null when the window holds fewer than
- * two drawable positions — a single point cannot define a route.
- */
-export function clipTrack(
+export function positionAtTime(
   track: VesselTrack,
-  fromMs: number,
-  toMs: number,
-): VesselTrack | null {
-  const { points } = track;
-  if (points.length < 2 || toMs <= fromMs) return null;
-
-  const out: VesselTrackPoint[] = [];
-
-  const atStart = positionAtTime(track, fromMs);
-  if (atStart) {
-    out.push({
-      t: fromMs,
-      lat: atStart.position[1],
-      lng: atStart.position[0],
-      sog: atStart.sog,
-      cog: atStart.course,
-      nav: null,
-    });
-  }
-  // Strictly inside, so neither edge can be duplicated by the interpolated ends.
-  for (const p of points) {
-    if (p.t > fromMs && p.t < toMs) out.push(p);
-  }
-  const atEnd = positionAtTime(track, toMs);
-  if (atEnd) {
-    out.push({
-      t: toMs,
-      lat: atEnd.position[1],
-      lng: atEnd.position[0],
-      sog: atEnd.sog,
-      cog: atEnd.course,
-      nav: null,
-    });
-  }
-
-  return out.length >= 2 ? { ...track, points: out } : null;
+  timeMs: number,
+): { position: [number, number]; course: number | null; sog: number | null } | null {
+  const s = sampleAt(track, timeMs);
+  return s ? { position: s.position, course: s.course, sog: s.sog } : null;
 }
 
 /**
- * A position every `stepMs` across the window, aligned to the wall clock.
+ * Marks every `stepMs` across a time window — the regular dots along the route.
  *
- * Aligned on purpose: a 10-minute grid that starts at 10:04 is unreadable, and
- * the tooltip is meant to answer "where was it at half past". Samples outside
- * the recorded span are skipped rather than extrapolated, so a window wider
- * than the data simply has fewer dots at the edges.
+ * Marks are aligned to the step boundary rather than to the track start, so a
+ * 10-minute step lands on :00, :10, :20 … and the times read as a clock rather
+ * than as "eleven minutes after the ship left". The window is intersected with
+ * the recorded span first: there is no honest mark outside the data.
+ *
+ * Every mark carries the reports it sits between (`fromT` / `toT`), so a hover
+ * can say "between 14:12 and 14:41" instead of presenting an interpolation as
+ * an observation.
  */
 export function sampleTrack(
   track: VesselTrack,
   fromMs: number,
   toMs: number,
   stepMs: number,
-): VesselSample[] {
-  if (stepMs <= 0 || toMs <= fromMs) return [];
-  const samples: VesselSample[] = [];
-  const first = Math.ceil(fromMs / stepMs) * stepMs;
-  for (let t = first; t <= toMs; t += stepMs) {
-    const at = positionAtTime(track, t);
-    if (!at) continue;
-    samples.push({ t, position: at.position, sog: at.sog, course: at.course });
+): VesselTimeMark[] {
+  const { points } = track;
+  if (points.length < 2 || stepMs <= 0) return [];
+
+  const lo = Math.max(fromMs, points[0].t);
+  const hi = Math.min(toMs, points[points.length - 1].t);
+  if (hi < lo) return [];
+
+  const marks: VesselTimeMark[] = [];
+  // First boundary at or after the window opens.
+  for (let t = Math.ceil(lo / stepMs) * stepMs; t <= hi; t += stepMs) {
+    const s = sampleAt(track, t);
+    if (!s) continue;
+    marks.push({
+      t,
+      position: s.position,
+      course: s.course,
+      sog: s.sog,
+      fromT: s.fromT,
+      toT: s.toT,
+    });
   }
-  return samples;
+  return marks;
+}
+
+/** One sampled position along a route, at a fixed time interval. */
+export interface VesselTimeMark {
+  /** Epoch milliseconds of the mark. */
+  t: number;
+  position: [number, number];
+  course: number | null;
+  sog: number | null;
+  fromT: number;
+  toT: number;
 }
 
 /** Straight-line length of a recorded track, in kilometres. */
