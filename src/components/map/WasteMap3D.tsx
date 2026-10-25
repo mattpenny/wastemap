@@ -11,7 +11,13 @@ import {
 } from "react";
 import maplibregl, { type Map as MapLibreMap } from "maplibre-gl";
 import { MapboxOverlay } from "@deck.gl/mapbox";
-import { ColumnLayer, IconLayer, PathLayer, ScatterplotLayer } from "@deck.gl/layers";
+import {
+  ColumnLayer,
+  IconLayer,
+  PathLayer,
+  ScatterplotLayer,
+  TextLayer,
+} from "@deck.gl/layers";
 import { AmbientLight, DirectionalLight, LightingEffect } from "@deck.gl/core";
 import type { PickingInfo } from "@deck.gl/core";
 
@@ -780,7 +786,7 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
     //     is. Null means every drawn vessel is a marker and nothing more.
     //
     // Everything is driven by the recorded AIS reports — see `vesselTracks.ts`.
-    const vesselLayers = vesselGeometry.flatMap(({ track, lo, hi, marks, active }) => {
+    const vesselLayers = vesselGeometry.flatMap(({ track, lo, hi, marks, active }, index) => {
       const color = vesselColor(track.mmsi);
       const points = track.points;
       const last = points[points.length - 1];
@@ -921,6 +927,58 @@ const WasteMap3D = forwardRef<WasteMap3DHandle, WasteMap3DProps>(function WasteM
           loadOptions: { image: { type: "image" } },
           // Hoverable so the vessel can name itself.
           pickable: true,
+        }),
+        // The vessel's name, drawn whenever the vessel is. A hull silhouette in
+        // a harbour is not self-explanatory, and a hover-only label means the
+        // map cannot be read without first finding the marker with the pointer.
+        //
+        // `pickable: false` is load-bearing. `handleHover` and `handleClick`
+        // branch on the layer-id prefix, and a text layer hands them a bare
+        // string where they expect a marker — not picking it at all is cheaper
+        // than guarding every branch against one more shape.
+        new TextLayer<VesselMarker>({
+          id: `vessel-label-${track.mmsi}`,
+          data: [marker],
+          getText: (d) => d.name,
+          getPosition: (d) => d.position,
+          // Clear of the hull: half of VESSEL_SIZE_PX plus a small gap. The
+          // icon rotates with the heading and the text does not, so a fixed
+          // offset stays legible at every course.
+          //
+          // Alternating above / below is a collision strategy, not decoration:
+          // at the phone overview the two hulls sit 14 px apart, so two labels
+          // stacked on the same side print on top of each other — which is
+          // exactly when the name matters most, because the hulls overlap too.
+          // One above and one below keeps both readable at every zoom without
+          // hiding either or moving it far from its ship.
+          getPixelOffset: [
+            0,
+            (index % 2 === 0 ? -1 : 1) * (VESSEL_SIZE_PX / 2 + 7),
+          ],
+          getSize: 13,
+          sizeUnits: "pixels",
+          getColor: [255, 255, 255, 255],
+          // The UI stack, not deck.gl's default. That default is
+          // `Monaco, monospace`, which does not exist on Windows — it falls back
+          // to a generic monospace and the names read as stencilled boxes.
+          fontFamily: "Inter, 'Segoe UI', system-ui, sans-serif",
+          fontWeight: 600,
+          // A dark halo rather than a background pill: the imagery underneath
+          // runs from pale quay to dark water, and an outline holds contrast
+          // over both without adding a box that competes with the facility pins.
+          // Kept narrow on purpose — at 13 px, an outline above ~2 px closes the
+          // counters of E, S and N and the word turns into a smudge.
+          outlineWidth: 1.5,
+          outlineColor: [2, 6, 23, 235],
+          // SDF, so the glyphs stay sharp at every zoom instead of being
+          // resampled from a 12 px bitmap atlas.
+          fontSettings: { sdf: true, buffer: 6, radius: 12 },
+          // Screen-space, exactly like the hull: a map rotated to the harbour's
+          // bearing must not tilt the text. Do NOT subtract the bearing here —
+          // that correction exists for the icon, which points somewhere.
+          getAngle: 0,
+          billboard: true,
+          pickable: false,
         }),
       ];
     });

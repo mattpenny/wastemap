@@ -306,11 +306,29 @@ Constants:
 | `vessel-dot-<mmsi>` | `ScatterplotLayer` | The 10-minute marks: radius 2.8 px, white 0.9 px stroke, **not** pickable. |
 | `vessel-dotpick-<mmsi>` | `ScatterplotLayer` | The hit area: radius **9 px**, fully transparent, `pickable`. A 2.8 px target is a miss waiting to happen, and enlarging the drawn dot to suit the pointer would make the route look like a string of beads. Picking is geometric, so transparency costs nothing. |
 | `vessel-icon-<mmsi>` | `IconLayer` | The hull itself, `billboard: true`, `pickable`. Always drawn when a track exists, with or without the route. |
+| `vessel-label-<mmsi>` | `TextLayer` | The vessel's name, 13 px, white with a 1.5 px dark halo, `pickable: false`. Drawn whenever the vessel is — a hull silhouette in a harbour is not self-explanatory, and a hover-only label cannot be read without first finding the marker with the pointer. |
 
 `TripsLayer` is **not** installed (`@deck.gl/geo-layers`) and must not be added: the
 project's `node_modules` has to match `package-lock.json` exactly, and the wake is a
 computed `PathLayer` that does the same job. See the note in
 `.workbuddy-ai/memory/MEMORY.md`.
+
+The label has four details that are each a fix, not a preference:
+
+- **`pickable: false`.** `handleHover` and `handleClick` branch on the layer-id prefix
+  and expect a marker object; a `TextLayer` hands them a bare string. Not picking it is
+  cheaper than guarding every branch against one more shape.
+- **`fontFamily` is the UI stack.** deck.gl's default is `Monaco, monospace`, which does
+  not exist on Windows — it falls back to a generic monospace and the names read as
+  stencilled boxes.
+- **`outlineWidth` 1.5, not 2.4.** At 13 px a thicker halo closes the counters of E, S
+  and N and the word turns into a smudge. It is a halo rather than a background pill so
+  it holds contrast from pale quay to dark water without competing with the pins.
+- **The offset alternates above / below by draw order.** At the phone overview the two
+  hulls sit 14 px apart; two labels on the same side print on top of each other, exactly
+  when the name matters most. One above and one below keeps both readable at every zoom.
+- **`getAngle: 0`, never `bearing - course`.** That correction belongs to the hull,
+  which points somewhere. Applied to text it would tilt the label as the map rotates.
 
 The geometry is memoised on `[vesselTracks, visibleVesselMmsis, vesselWindow,
 activeVesselMmsi]`, **not** recomputed per frame. The animation only re-samples a
@@ -664,6 +682,7 @@ PW_PATH="C:/Users/Ansum/.workbuddy-ai/binaries/node/pwtest/node_modules/playwrig
 | `_vesselmobile.mjs` | 26 | Picker inside the viewport at 320/360/390, the card above the dock at all three, field widths, legend shorter than 412 px |
 | `_vesselclick.mjs` | 7 | The click crash, no drawer, framing, hover after click |
 | `_vesselheading.mjs` | 5 | Hull orientation at map bearing 0 **and** −18 |
+| `_vessellabel.mjs` | 7 | The name is drawn on the map, A/B'd against the same band with the vessel hidden; the text stays wide on a rotated map |
 | `verify-browser.mjs` | 151 | Whole app |
 | `verify-api.mjs` | 112 | Whole API (defaults to port 3000 — always set `BASE`) |
 | `_vesselnew.mjs.superseded` | — | The pre-card flow (legend toggle). Kept for the record, not run. |
@@ -694,8 +713,8 @@ Harness notes that cost real time:
   click there; at the landing zoom the hull is ~11 px tall on screen.
 
 Totals at the time of writing: `_vesselcard` 28/28, `_vesselmobile` 26/26,
-`_vesselclick` 7/7, `_vesselheading` 5/5, `verify-browser` 151/151, `verify-api`
-112/112, `tsc --noEmit` clean.
+`_vesselclick` 7/7, `_vesselheading` 5/5, `_vessellabel` 7/7, `verify-browser` 151/151,
+`verify-api` 112/112, `tsc --noEmit` clean.
 
 ---
 
